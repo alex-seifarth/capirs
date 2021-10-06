@@ -67,3 +67,9 @@ void application_stop(application_t app)
     assert(app && *app);
     (*app)->stop();
 }
+
+application_t application_clone(application_t old_app)
+{
+    assert(old_app && *old_app);
+    return new std::shared_ptr<vsomeip::application>(*old_app);
+}

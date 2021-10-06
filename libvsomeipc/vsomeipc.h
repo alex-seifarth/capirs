@@ -37,6 +37,7 @@ VSOMEIPC_EXPORT int application_init(application_t app);
 VSOMEIPC_EXPORT void application_destroy(application_t app);
 VSOMEIPC_EXPORT void application_start(application_t app);
 VSOMEIPC_EXPORT void application_stop(application_t app);
+VSOMEIPC_EXPORT application_t application_clone(application_t old_app);
 
 
 #ifdef __cplusplus
