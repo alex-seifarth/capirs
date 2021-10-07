@@ -11,6 +11,23 @@ include!(concat!(env!("OUT_DIR"), "/vsomeipc.rs"));
 
 use std::ffi::CString;
 
+pub type ServiceID = u16;
+pub type InstanceID = u16;
+pub type MajorVersion = u8;
+pub type MinorVersion = u32;
+
+pub struct ServiceVersion {
+    major: MajorVersion,
+    minor: MinorVersion,
+}
+
+pub const DEFAULT_MAJOR: MajorVersion = 0x00;
+pub const DEFAULT_MINOR: MinorVersion = 0x00000000;
+pub const ANY_SERVICE: ServiceID = 0xffff;
+pub const ANY_INSTANCE: InstanceID = 0xffff;
+pub const ANY_MAJOR: MajorVersion = 0xff;
+pub const ANY_MINOR: MinorVersion = 0xffffffff;
+
 pub struct Runtime {
     runtime: runtime_t,
 }
@@ -36,7 +53,7 @@ impl Runtime {
             unsafe{ application_destroy(application)};
             return Err(())
         }
-        Ok( Application{ application } )
+        Ok( Application{ application, name: name.to_string() } )
     }
 }
 
@@ -48,6 +65,12 @@ impl Drop for Runtime {
 }
 
 unsafe impl Send for Runtime {}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum AppRegistrationState {
+    Registered,
+    NotRegistered,
+}
 
 /// Represents a vsomeip application object.
 /// vsomeip application objects are the main entry to register services, find services, find
@@ -61,7 +84,8 @@ unsafe impl Send for Runtime {}
 /// The application object wrapper for Rust is Send + Sync and can also be cloned. The latter costs
 /// an allocation of a C++ std::shared_ptr on the heap.
 pub struct Application {
-    application: application_t
+    application: application_t,
+    name: String,
 }
 
 impl Application {
@@ -77,21 +101,44 @@ impl Application {
     pub fn stop(&self) {
         unsafe{ application_stop( self.application ) };
     }
+
+    pub fn register_state_handler<F: Fn(AppRegistrationState) + Send + Sync + 'static>(&self, cbk: F) {
+        let cb: Box<Box<dyn Fn(AppRegistrationState)>> = Box::new(Box::new(cbk));
+        unsafe {
+            application_register_state_handler(self.application,
+                Some(Application::state_handler_wrapper), Box::into_raw(cb) as *mut _);
+        }
+    }
+
+    extern "C" fn state_handler_wrapper(state: app_reg_state, context: *mut ::std::os::raw::c_void) {
+        let closure: &mut Box<dyn Fn(AppRegistrationState)> = unsafe { std::mem::transmute(context) };
+        let s = match state {
+            app_reg_state_ARS_REGISTERED => AppRegistrationState::Registered,
+            _ => AppRegistrationState::NotRegistered,
+        };
+        closure(s);
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn offer_service(&self, service: ServiceID, instance: InstanceID, major: MajorVersion,
+                         minor: MinorVersion) {
+        unsafe{ application_offer_service(self.application, service, instance, major, minor) };
+    }
+
+    pub fn stop_offer_service(&self, service: ServiceID, instance: InstanceID, major: MajorVersion,
+                         minor: MinorVersion) {
+        unsafe{ application_stop_offer_service(self.application, service, instance, major, minor) };
+    }
+
 }
 
 impl Drop for Application {
     fn drop(&mut self) {
         unsafe{ application_destroy( self.application ) };
         self.application = std::ptr::null_mut();
-    }
-}
-
-impl Clone for Application {
-    /// Application objects can be cloned.
-    /// This simply creates a new shared pointer (C++) on the heap that references the same
-    /// vsomeip application object as 'self' does.
-    fn clone(&self) -> Self {
-        Application{ application: unsafe{ application_clone( self.application ) } }
     }
 }
 
