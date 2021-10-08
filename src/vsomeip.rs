@@ -2,31 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-#![allow(unused)]
-
-include!(concat!(env!("OUT_DIR"), "/vsomeipc.rs"));
+use super::vsomeipc::*;
+use super::message::*;
 
 use std::ffi::CString;
-
-pub type ServiceID = u16;
-pub type InstanceID = u16;
-pub type MajorVersion = u8;
-pub type MinorVersion = u32;
-
-pub struct ServiceVersion {
-    major: MajorVersion,
-    minor: MinorVersion,
-}
-
-pub const DEFAULT_MAJOR: MajorVersion = 0x00;
-pub const DEFAULT_MINOR: MinorVersion = 0x00000000;
-pub const ANY_SERVICE: ServiceID = 0xffff;
-pub const ANY_INSTANCE: InstanceID = 0xffff;
-pub const ANY_MAJOR: MajorVersion = 0xff;
-pub const ANY_MINOR: MinorVersion = 0xffffffff;
+use std::sync::{Mutex, RwLock, Arc};
 
 pub struct Runtime {
     runtime: runtime_t,
@@ -41,7 +21,7 @@ impl Runtime {
         Runtime{ runtime }
     }
 
-    pub fn create_application(&self, name: &str) -> Result<Application, ()> {
+    pub fn create_application(&self, name: &str) -> Result<Arc<Application>, ()> {
         use std::os::raw::c_char;
         let mut application : application_t = std::ptr::null_mut();
         let c_str_name = CString::new(name).unwrap();
@@ -53,7 +33,7 @@ impl Runtime {
             unsafe{ application_destroy(application)};
             return Err(())
         }
-        Ok( Application{ application, name: name.to_string() } )
+        Ok( Application::new(application, name) )
     }
 }
 
@@ -86,9 +66,38 @@ pub enum AppRegistrationState {
 pub struct Application {
     application: application_t,
     name: String,
+    state_handlers: RwLock<Vec<Box<dyn Fn(AppRegistrationState) + Send + Sync + 'static>>>,
 }
 
 impl Application {
+
+    fn new(application: application_t, name: &str) -> Arc<Application> {
+        let mut app = Arc::new (Application{
+            application,
+            name: name.to_string(),
+            state_handlers: RwLock::new( Vec::new() )
+        });
+
+        unsafe { application_register_state_handler(app.application, Some(Application::state_callback),
+                                   &*app as *const _ as *mut std::os::raw::c_void); }
+        app
+    }
+
+    extern "C" fn state_callback(state: app_reg_state, context: *mut ::std::os::raw::c_void) {
+        let app = unsafe{(context as *mut Application).as_ref()}.unwrap();
+        app.on_state_changed(state);
+    }
+
+    fn on_state_changed(&self, state: app_reg_state) {
+        let shmx = self.state_handlers.read().unwrap();
+        let st = match state {
+            super::vsomeipc::app_reg_state_ARS_REGISTERED => AppRegistrationState::Registered,
+            _ => AppRegistrationState::NotRegistered
+        };
+        for handler in &*shmx {
+            handler(st);
+        }
+    }
 
     /// The start method enters the event processing loop of the application. So this method will
     /// block until the runtime or application shuts down (see Application::stop).
@@ -103,20 +112,8 @@ impl Application {
     }
 
     pub fn register_state_handler<F: Fn(AppRegistrationState) + Send + Sync + 'static>(&self, cbk: F) {
-        let cb: Box<Box<dyn Fn(AppRegistrationState)>> = Box::new(Box::new(cbk));
-        unsafe {
-            application_register_state_handler(self.application,
-                Some(Application::state_handler_wrapper), Box::into_raw(cb) as *mut _);
-        }
-    }
-
-    extern "C" fn state_handler_wrapper(state: app_reg_state, context: *mut ::std::os::raw::c_void) {
-        let closure: &mut Box<dyn Fn(AppRegistrationState)> = unsafe { std::mem::transmute(context) };
-        let s = match state {
-            app_reg_state_ARS_REGISTERED => AppRegistrationState::Registered,
-            _ => AppRegistrationState::NotRegistered,
-        };
-        closure(s);
+        let mut shmx = self.state_handlers.write().unwrap();
+        shmx.push(Box::new(cbk));
     }
 
     pub fn name(&self) -> &str {
@@ -137,6 +134,7 @@ impl Application {
 
 impl Drop for Application {
     fn drop(&mut self) {
+        unsafe{ application_unregister_state_handler( self.application )};
         unsafe{ application_destroy( self.application ) };
         self.application = std::ptr::null_mut();
     }

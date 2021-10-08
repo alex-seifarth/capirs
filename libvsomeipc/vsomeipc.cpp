@@ -105,3 +105,25 @@ void application_stop_offer_service(application_t app, service_t _service, insta
     assert(app && *app);
     (*app)->stop_offer_service(_service, _instance, _major, _minor);
 }
+
+void application_clear_all_handlers(application_t app)
+{
+    assert(app && *app);
+    (*app)->clear_all_handler();
+}
+
+void application_register_message_handler(application_t app, service_t _service, instance_t _instance,
+                                          message_callback cbk, void* context)  {
+    assert(app && *app);
+    (*app)->register_message_handler(_service, _instance, vsomeip::ANY_METHOD,
+         [cbk, context](std::shared_ptr<vsomeip::message> const& msg) {
+        auto message = new std::shared_ptr<vsomeip::message>{msg};
+        cbk(message, context);
+    });
+}
+
+void application_unregister_message_handler(application_t app, service_t _service, instance_t _instance)
+{
+    assert(app && *app);
+    (*app)->unregister_message_handler(_service, _instance, vsomeip::ANY_METHOD);
+}

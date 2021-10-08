@@ -7,10 +7,15 @@ name = "capirs"
 version = "0.1.0"
 edition = "2018"
 
+[features]
+#async-tokio = ["tokio"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [build-dependencies]
 bindgen = "0.59"
 cmake = "0.1"
 
 [dependencies]
+tokio = {version="1", features=['sync']}
 libc = "0.2"
+

@@ -14,6 +14,7 @@ typedef vsomeip::client_t client_id_t;
 
 typedef std::shared_ptr<vsomeip::runtime>* runtime_t;
 typedef std::shared_ptr<vsomeip::application>* application_t;
+typedef std::shared_ptr<vsomeip::message> const* message_t;
 
 typedef vsomeip::service_t service_t;
 typedef vsomeip::instance_t instance_t;
@@ -28,6 +29,7 @@ extern "C" {
 
 typedef void* application_t;
 typedef void* runtime_t;
+typedef void* message_t;
 
 typedef uint16_t client_id_t;
 typedef uint16_t service_t;
@@ -62,6 +64,12 @@ VSOMEIPC_EXPORT void application_offer_service(application_t app, service_t _ser
         major_version_t _major, minor_version_t _minor);
 VSOMEIPC_EXPORT void application_stop_offer_service(application_t app, service_t _service, instance_t _instance,
         major_version_t _major, minor_version_t _minor);
+VSOMEIPC_EXPORT void application_clear_all_handlers(application_t app);
+
+typedef void(*message_callback)(const message_t msg, void* context);
+VSOMEIPC_EXPORT void application_register_message_handler(application_t app, service_t _service, instance_t _instance,
+          message_callback cbk, void* context);
+VSOMEIPC_EXPORT void application_unregister_message_handler(application_t app, service_t _service, instance_t _instance);
 
 #ifdef __cplusplus
 }
