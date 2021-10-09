@@ -16,6 +16,9 @@ pub struct ServiceInstanceID {
     pub minor_version: someip::MinorVersion,
 }
 
+//#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub type ServiceKey = (someip::ServiceID, someip::InstanceID, someip::MajorVersion);
+
 #[derive(Clone)]
 pub struct ServiceAdapter<T: Send + 'static> {
     pub siid: ServiceInstanceID,

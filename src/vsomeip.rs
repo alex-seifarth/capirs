@@ -3,7 +3,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
 */
 use super::vsomeipc::*;
-use super::message::*;
 
 use std::ffi::CString;
 use std::sync::{Mutex, RwLock, Arc};

@@ -20,6 +20,13 @@ typedef vsomeip::service_t service_t;
 typedef vsomeip::instance_t instance_t;
 typedef vsomeip::major_version_t major_version_t;
 typedef vsomeip::minor_version_t minor_version_t;
+typedef vsomeip::method_t method_t;
+
+typedef vsomeip::client_t client_t;
+typedef vsomeip::session_t session_t;
+typedef vsomeip::message_type_e message_type_t;
+typedef vsomeip::protocol_version_t protocol_version_t;
+typedef vsomeip::return_code_e return_code_t;
 
 extern "C" {
 
@@ -36,6 +43,12 @@ typedef uint16_t service_t;
 typedef uint16_t instance_t;
 typedef uint8_t major_version_t;
 typedef uint32_t minor_version_t;
+typedef uint16_t method_t;
+typedef uint16_t client_t;
+typedef uint16_t session_t;
+typedef uint8_t message_type_t;
+typedef uint8_t protocol_version_t;
+typedef uint8_t return_code_t;
 
 #endif
 
@@ -70,6 +83,18 @@ typedef void(*message_callback)(const message_t msg, void* context);
 VSOMEIPC_EXPORT void application_register_message_handler(application_t app, service_t _service, instance_t _instance,
           message_callback cbk, void* context);
 VSOMEIPC_EXPORT void application_unregister_message_handler(application_t app, service_t _service, instance_t _instance);
+
+VSOMEIPC_EXPORT service_t message_get_service(message_t msg);
+VSOMEIPC_EXPORT instance_t message_get_instance(message_t msg);
+VSOMEIPC_EXPORT method_t message_get_method(message_t msg);
+VSOMEIPC_EXPORT client_t message_get_client(message_t msg);
+VSOMEIPC_EXPORT session_t message_get_session(message_t msg);
+VSOMEIPC_EXPORT message_type_t message_get_type(message_t msg);
+VSOMEIPC_EXPORT major_version_t message_get_interface_version(message_t msg);
+VSOMEIPC_EXPORT protocol_version_t message_get_protocol_version(message_t msg);
+VSOMEIPC_EXPORT return_code_t message_get_return_code(message_t msg);
+VSOMEIPC_EXPORT int message_is_reliable(message_t msg);
+VSOMEIPC_EXPORT int message_is_initial(message_t msg);
 
 #ifdef __cplusplus
 }

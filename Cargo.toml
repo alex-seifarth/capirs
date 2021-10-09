@@ -7,6 +7,14 @@ name = "capirs"
 version = "0.1.0"
 edition = "2018"
 
+[lib]
+name = "capirs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "service"
+path = "examples/service.rs"
+
 [features]
 #async-tokio = ["tokio"]
 
@@ -16,6 +24,6 @@ bindgen = "0.59"
 cmake = "0.1"
 
 [dependencies]
-tokio = {version="1", features=['sync']}
+tokio = {version="1", features=['full']}
 libc = "0.2"
 

@@ -6,6 +6,10 @@
 #include <vsomeip/vsomeip.hpp>
 #include <cassert>
 
+// ================================================================================================
+// runtime
+// ================================================================================================
+
 int runtime_get(runtime_t* rt)
 {
     assert(rt);
@@ -38,6 +42,9 @@ int runtime_create_app(runtime_t rt, application_t* app, const char* app_name)
     return 0;
 }
 
+// ================================================================================================
+// application
+// ================================================================================================
 //client_id_t application_client_id(application_t app)
 //{
 //    assert(app && app->application_);
@@ -113,7 +120,8 @@ void application_clear_all_handlers(application_t app)
 }
 
 void application_register_message_handler(application_t app, service_t _service, instance_t _instance,
-                                          message_callback cbk, void* context)  {
+                                          message_callback cbk, void* context)
+{
     assert(app && *app);
     (*app)->register_message_handler(_service, _instance, vsomeip::ANY_METHOD,
          [cbk, context](std::shared_ptr<vsomeip::message> const& msg) {
@@ -126,4 +134,63 @@ void application_unregister_message_handler(application_t app, service_t _servic
 {
     assert(app && *app);
     (*app)->unregister_message_handler(_service, _instance, vsomeip::ANY_METHOD);
+}
+
+// ================================================================================================
+// message
+// ================================================================================================
+
+service_t message_get_service(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_service();
+}
+
+instance_t message_get_instance(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_instance();
+}
+
+method_t message_get_method(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_method();
+}
+
+client_t message_get_client(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_client();
+}
+
+session_t message_get_session(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_session();
+}
+
+message_type_t message_get_type(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_message_type();
+}
+
+major_version_t message_get_interface_version(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_interface_version();
+}
+
+protocol_version_t message_get_protocol_version(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_protocol_version();
+}
+
+return_code_t message_get_return_code(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->get_return_code();
+}
+
+int message_is_reliable(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->is_reliable() ? 1 : 0;
+}
+
+int message_is_initial(message_t msg) {
+    assert(msg && *msg);
+    return (*msg)->is_initial() ? 1 : 0;
 }

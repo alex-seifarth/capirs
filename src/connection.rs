@@ -4,7 +4,11 @@ use super::someip;
 use std::sync::{Arc, Mutex, Condvar, RwLock};
 use std::collections::HashMap;
 use std::thread::JoinHandle;
-use crate::service_adapter::ServiceAdapter;
+
+#[derive(Copy, Clone)]
+pub enum Command {
+    Message(someip::Message)
+}
 
 /// Connection handles the communication with the vsomeip layer.
 pub struct Connection {
@@ -12,7 +16,7 @@ pub struct Connection {
     application: vsomeipc::application_t,
     application_name: String,
     connection_status: (Mutex<bool>, Condvar),
-    services: RwLock<HashMap<someip::ServiceInstanceID, Box<someip::ServiceAdapter<i32>>>>,
+    services: RwLock<HashMap<someip::ServiceKey, Box<someip::ServiceAdapter<Command>>>>,
 }
 
 impl Connection {
@@ -76,15 +80,16 @@ impl Connection {
         self.application_name.as_str()
     }
 
-    pub fn register_service(&self, siid: someip::ServiceInstanceID, snd: someip::Sender<i32>)
+    pub fn register_service(&self, siid: someip::ServiceInstanceID, snd: someip::Sender<Command>)
         -> Result<(), ()> {
+        let service_key = (siid.service, siid.instance, siid.major_version);
         {
             let mut guard = self.services.write().unwrap();
-            if guard.contains_key(&siid) {
+            if guard.contains_key(&service_key) {
                 return Err(())
             }
-            let adapter = Box::new(ServiceAdapter { siid: siid.clone(), sender: snd });
-            guard.insert(siid.clone(), adapter);
+            let adapter = Box::new(someip::ServiceAdapter { siid: siid.clone(), sender: snd });
+            guard.insert(service_key, adapter);
 
             unsafe {
                 vsomeipc::application_register_message_handler(self.application,
@@ -98,10 +103,11 @@ impl Connection {
     }
 
     pub fn unregister_service(&self, siid: someip::ServiceInstanceID) {
+        let service_key = (siid.service, siid.instance, siid.major_version);
         {
             let mut guard = self.services.write().unwrap();
-            guard.remove(&siid);
-            if !guard.keys().any(|&k|{k.service == siid.service && k.instance == siid.instance}) {
+            guard.remove(&service_key);
+            if !guard.keys().any(|&k|{k.0 == siid.service && k.1 == siid.instance}) {
                 unsafe{ vsomeipc::application_unregister_message_handler(self.application,
                     siid.service, siid.instance);
                 }
@@ -109,6 +115,44 @@ impl Connection {
         }
         unsafe{ vsomeipc::application_stop_offer_service(self.application, siid.service,
              siid.instance, siid.major_version, siid.minor_version) };
+    }
+
+    fn process_incoming_message(&self, msg: vsomeipc::message_t) {
+        match someip::MessageType::from_u8(unsafe{ vsomeipc::message_get_type(msg) }) {
+            someip::MessageType::Request => self.process_service_message(msg),
+            someip::MessageType::RequestNoReturn => self.process_service_message(msg),
+            someip::MessageType::Response => { todo!(); },
+            someip::MessageType::Error => { todo!(); }
+            someip::MessageType::Notification => { todo!(); }
+
+            _ => { println!("unsupported message type" )},
+        }
+    }
+
+    fn process_service_message(&self, msg: vsomeipc::message_t) {
+        let service_id = unsafe{ vsomeipc::message_get_service(msg)};
+        let instance_id = unsafe{ vsomeipc::message_get_instance(msg)};
+        let major_version = unsafe{ vsomeipc::message_get_interface_version(msg)};
+        {
+            let guard = self.services.read().unwrap();
+            if !self.try_forward_incoming_message(&msg, &(service_id, instance_id, major_version), &guard) {
+                if !self.try_forward_incoming_message(&msg, &(service_id, instance_id, someip::ANY_MAJOR), &guard) {
+                    self.try_forward_incoming_message(&msg, &(service_id, someip::ANY_INSTANCE, someip::ANY_MAJOR), &guard);
+                }
+            }
+        }
+    }
+
+    fn try_forward_incoming_message(&self, msg: &vsomeipc::message_t, sk: &someip::ServiceKey,
+        map: &HashMap<someip::ServiceKey, Box<someip::ServiceAdapter<Command>>>) -> bool {
+        if let Some(service) = map.get(&sk) {
+            let message = make_message_from(msg);
+            if service.sender.blocking_send(Command::Message(message) ).is_err() {
+                // todo log/handle send-failure
+            }
+            return true;
+        }
+        false
     }
 }
 
@@ -148,6 +192,22 @@ fn create_application(runtime: vsomeipc::runtime_t, app_name: &str)
     Ok( application )
 }
 
+fn make_message_from(msg: &vsomeipc::message_t) -> someip::Message {
+    someip::Message {
+        service: unsafe{ vsomeipc::message_get_service(*msg) },
+        instance: unsafe{ vsomeipc::message_get_instance(*msg) },
+        client: unsafe{ vsomeipc::message_get_client(*msg) },
+        session: unsafe{ vsomeipc::message_get_session(*msg) },
+        method: unsafe{ vsomeipc::message_get_method(*msg) },
+        message_type: someip::MessageType::from_u8(unsafe{ vsomeipc::message_get_type(*msg) } ),
+        protocol_version: unsafe{ vsomeipc::message_get_protocol_version(*msg) },
+        interface_version: unsafe{ vsomeipc::message_get_interface_version(*msg) },
+        return_code: someip::ReturnCode::from_u8(unsafe{ vsomeipc::message_get_return_code(*msg) } ),
+        is_reliable: 0 != unsafe{ vsomeipc::message_is_reliable(*msg) },
+        is_initial: 0 != unsafe{ vsomeipc::message_is_initial(*msg) },
+    }
+}
+
 extern "C"
 fn state_changed_callback(state: vsomeipc::app_reg_state, context: *mut ::std::os::raw::c_void) {
     let connection = unsafe{(context as *mut Connection).as_ref()}.unwrap();
@@ -156,5 +216,6 @@ fn state_changed_callback(state: vsomeipc::app_reg_state, context: *mut ::std::o
 
 extern "C"
 fn message_received_callback(msg: vsomeipc::message_t, context: *mut ::std::os::raw::c_void) {
-
+    let connection = unsafe{(context as *mut Connection).as_ref()}.unwrap();
+    connection.process_incoming_message(msg);
 }

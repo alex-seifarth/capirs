@@ -60,7 +60,7 @@ impl MessageType {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum ReturnCode {
+pub enum ReturnCode {
     Ok,
     NotOk,
     UnknownService,
@@ -120,3 +120,18 @@ pub const ANY_INSTANCE: InstanceID = 0xffff;
 pub const ANY_MAJOR: MajorVersion = 0xff;
 pub const ANY_MINOR: MinorVersion = 0xffffffff;
 pub const ANY_METHOD: MethodID = 0xffff;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Message {
+    pub service: ServiceID,
+    pub instance: InstanceID,
+    pub client: ClientID,
+    pub session: SessionID,
+    pub method: MethodID,
+    pub message_type: MessageType,
+    pub protocol_version: ProtocolVersion,
+    pub interface_version: InterfaceVersion,
+    pub return_code: ReturnCode,
+    pub is_reliable: bool,
+    pub is_initial: bool,
+}
