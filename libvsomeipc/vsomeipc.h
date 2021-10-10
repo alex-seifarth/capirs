@@ -88,6 +88,12 @@ VSOMEIPC_EXPORT void application_request_service(application_t app, service_t se
                                                  major_version_t mjr_version, minor_version_t mnr_version);
 VSOMEIPC_EXPORT void application_release_service(application_t app, service_t service, instance_t instance);
 
+typedef void(*availability_callback)(service_t service, instance_t instance, int available, void* context);
+VSOMEIPC_EXPORT void application_register_availability_callback(application_t app, service_t service, instance_t instance,
+                                                                availability_callback cbk, void* context);
+VSOMEIPC_EXPORT void application_unregister_availability_callback(application_t app, service_t service, instance_t instance);
+VSOMEIPC_EXPORT int application_is_available(application_t app, service_t service, instance_t instance);
+
 VSOMEIPC_EXPORT service_t message_get_service(message_t msg);
 VSOMEIPC_EXPORT instance_t message_get_instance(message_t msg);
 VSOMEIPC_EXPORT method_t message_get_method(message_t msg);

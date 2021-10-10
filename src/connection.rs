@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, Condvar, RwLock};
 use std::collections::{HashMap};
 use std::thread::JoinHandle;
 use crate::types::MajorVersion;
+use std::os::raw::c_int;
 
 pub type Sender<T> = tokio::sync::mpsc::Sender<T>;
 pub type ServiceKey = (someip::ServiceID, someip::InstanceID, someip::MajorVersion);
@@ -32,11 +33,11 @@ pub struct ProxyAdapter<T: Send + 'static> {
     pub proxy_id: ProxyID,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Command {
     Request(someip::Message),
-    ServiceAvailable(someip::Service, someip::InstanceID),
-    ServiceUnavailable(someip::Service, someip::InstanceID),
+    ServiceAvailable(someip::ServiceID, someip::InstanceID),
+    ServiceUnavailable(someip::ServiceID, someip::InstanceID),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -166,15 +167,23 @@ impl Connection {
                 if entry.0 != siid.major_version {
                     return Err(CapiError::MajorVersionConflict);
                 }
+                if self.send_actual_availability(siid.service, siid.instance, &proxy_adapter.sender).is_err() {
+                    // todo handle send error
+                }
                 entry.1.insert(proxy_id, proxy_adapter);
             }
             else {
+                if self.send_actual_availability(siid.service, siid.instance, &proxy_adapter.sender).is_err() {
+                    // todo handle send error
+                }
                 let mut proxy_map = HashMap::new();
                 proxy_map.insert(proxy_id, proxy_adapter);
                 lock.insert(proxy_service_key, (siid.major_version, proxy_map));
                 unsafe{ vsomeipc::application_request_service(self.application,
                     siid.service, siid.instance, siid.major_version, siid.minor_version) };
-                // register availability handler for (service, instance)
+                unsafe{ vsomeipc::application_register_availability_callback(self.application,
+                    siid.service, siid.instance, Some(availability_callback),
+                    self as *const _ as *mut std::os::raw::c_void) };
             }
         }
         self.add_msg_handler(siid.service, siid.instance);
@@ -188,8 +197,20 @@ impl Connection {
             self.release_proxy_id(proxy_id);
             if svc_entry.1.is_empty() {
                 unsafe{ vsomeipc::application_release_service(self.application, service, instance) };
-                // unregister availability handler (service, instance)
+                unsafe{ vsomeipc::application_unregister_availability_callback(self.application, service, instance) };
                 lock.remove(&(service, instance));
+            }
+        }
+    }
+
+    fn on_availability_callback(&self, service: someip::ServiceID, instance: someip::InstanceID, avail: bool) {
+        let lock = self.req_services.read().unwrap();
+        if let Some(entry) = lock.get(&(service, instance)) {
+            let cmd = bool_to_availability(avail, service, instance);
+            for proxy in entry.1.values() {
+                if proxy.sender.blocking_send(cmd).is_err() {
+                    // todo log/handle send error
+                }
             }
         }
     }
@@ -286,6 +307,18 @@ impl Connection {
     fn release_proxy_id(&self, _proxy_id: ProxyID) {
     }
 
+    fn is_service_available(&self, service: someip::ServiceID, instance: someip::InstanceID) -> bool {
+        0 < unsafe{ vsomeipc::application_is_available(self.application, service, instance) }
+    }
+
+    fn send_actual_availability(&self, service: someip::ServiceID, instance: someip::InstanceID,
+        sender: &Sender<Command>) -> Result<(), ()> {
+        if sender.blocking_send(bool_to_availability(
+            self.is_service_available(service, instance), service, instance )).is_err() {
+            return Err(());
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Connection {
@@ -340,6 +373,15 @@ fn make_message_from(msg: &vsomeipc::message_t) -> someip::Message {
     }
 }
 
+fn bool_to_availability(avail: bool, service: someip::ServiceID, instance: someip::InstanceID)
+    -> Command {
+    if avail {
+        Command::ServiceAvailable(service, instance)
+    } else {
+        Command::ServiceUnavailable(service, instance)
+    }
+}
+
 extern "C"
 fn state_changed_callback(state: vsomeipc::app_reg_state, context: *mut ::std::os::raw::c_void) {
     let connection = unsafe{(context as *mut Connection).as_ref()}.unwrap();
@@ -350,4 +392,12 @@ extern "C"
 fn message_received_callback(msg: vsomeipc::message_t, context: *mut ::std::os::raw::c_void) {
     let connection = unsafe{(context as *mut Connection).as_ref()}.unwrap();
     connection.process_incoming_message(msg);
+}
+
+extern "C"
+fn availability_callback(service: someip::ServiceID, instance: someip::InstanceID, avail: c_int,
+                         context: *mut ::std::os::raw::c_void)
+{
+    let connection = unsafe{(context as *mut Connection).as_ref()}.unwrap();
+    connection.on_availability_callback(service, instance, avail > 0);
 }

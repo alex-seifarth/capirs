@@ -149,6 +149,28 @@ void application_release_service(application_t app, service_t service, instance_
     (*app)->release_service(service, instance);
 }
 
+void application_register_availability_callback(application_t app, service_t service, instance_t instance,
+                                                                availability_callback cbk, void* context)
+{
+    assert(app && *app);
+    (*app)->register_availability_handler(service, instance,
+  [cbk, context](service_t s, instance_t i, bool avail) {
+        cbk(s, i, avail ? 1 : 0, context);
+    });
+}
+
+void application_unregister_availability_callback(application_t app, service_t service, instance_t instance)
+{
+    assert(app && *app);
+    (*app)->unregister_availability_handler(service, instance);
+}
+
+int application_is_available(application_t app, service_t service, instance_t instance) {
+    assert(app && *app);
+    return (*app)->is_available(service, instance);
+}
+
+
 // ================================================================================================
 // message
 // ================================================================================================
