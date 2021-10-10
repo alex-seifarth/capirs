@@ -5,12 +5,10 @@
 mod vsomeipc;
 
 mod connection;
-mod service_adapter;
 mod types;
 
 pub mod someip {
     pub use super::types::*;
-    pub use super::service_adapter::*;
 }
 
 pub use connection::*;

@@ -11,9 +11,9 @@ edition = "2018"
 name = "capirs"
 path = "src/lib.rs"
 
-[[bin]]
-name = "service"
-path = "examples/service.rs"
+#[[bin]]
+#name = "service"
+#path = "examples/service.rs"
 
 [features]
 #async-tokio = ["tokio"]

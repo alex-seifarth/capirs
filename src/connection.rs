@@ -2,12 +2,47 @@
 use super::vsomeipc;
 use super::someip;
 use std::sync::{Arc, Mutex, Condvar, RwLock};
-use std::collections::HashMap;
+use std::collections::{HashMap};
 use std::thread::JoinHandle;
+use crate::types::MajorVersion;
+
+pub type Sender<T> = tokio::sync::mpsc::Sender<T>;
+pub type ServiceKey = (someip::ServiceID, someip::InstanceID, someip::MajorVersion);
+pub type ProxyServiceKey = (someip::ServiceID, someip::InstanceID);
+pub type ProxyID = u64;
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct ServiceInstanceID {
+    pub service: someip::ServiceID,
+    pub instance: someip::InstanceID,
+    pub major_version: someip::MajorVersion,
+    pub minor_version: someip::MinorVersion,
+}
+
+#[derive(Clone)]
+pub struct ServiceAdapter<T: Send + 'static> {
+    pub siid: ServiceInstanceID,
+    pub sender: Sender<T>,
+}
+
+#[derive(Clone)]
+pub struct ProxyAdapter<T: Send + 'static> {
+    pub siid: ServiceInstanceID,
+    pub sender: Sender<T>,
+    pub proxy_id: ProxyID,
+}
 
 #[derive(Copy, Clone)]
 pub enum Command {
-    Message(someip::Message)
+    Request(someip::Message),
+    ServiceAvailable(someip::Service, someip::InstanceID),
+    ServiceUnavailable(someip::Service, someip::InstanceID),
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum CapiError {
+    OutOfProxyIds,
+    MajorVersionConflict,
 }
 
 /// Connection handles the communication with the vsomeip layer.
@@ -16,7 +51,10 @@ pub struct Connection {
     application: vsomeipc::application_t,
     application_name: String,
     connection_status: (Mutex<bool>, Condvar),
-    services: RwLock<HashMap<someip::ServiceKey, Box<someip::ServiceAdapter<Command>>>>,
+    services: RwLock<HashMap<ServiceKey, Box<ServiceAdapter<Command>>>>,
+    msg_handler_refs: Mutex<HashMap<(someip::ServiceID, someip::InstanceID), u32>>,
+    req_services: RwLock<HashMap<ProxyServiceKey, (MajorVersion, HashMap<ProxyID, ProxyAdapter<Command>>)>>,
+    proxy_id_counter: Mutex<ProxyID>,
 }
 
 impl Connection {
@@ -33,6 +71,9 @@ impl Connection {
             connection_status: (Mutex::new(false), Condvar::new()),
             application_name: app_name.to_string(),
             services: RwLock::new(HashMap::new()),
+            msg_handler_refs: Mutex::new(HashMap::new()),
+            req_services: RwLock::new(HashMap::new()),
+            proxy_id_counter: Mutex::new(0),
         });
 
         unsafe{ vsomeipc::application_register_state_handler( application,
@@ -80,7 +121,9 @@ impl Connection {
         self.application_name.as_str()
     }
 
-    pub fn register_service(&self, siid: someip::ServiceInstanceID, snd: someip::Sender<Command>)
+    /// Registers a service provider and begins to forward received SOME/IP message to the
+    /// given channel.
+    pub fn register_service(&self, siid: ServiceInstanceID, snd: Sender<Command>)
         -> Result<(), ()> {
         let service_key = (siid.service, siid.instance, siid.major_version);
         {
@@ -88,33 +131,67 @@ impl Connection {
             if guard.contains_key(&service_key) {
                 return Err(())
             }
-            let adapter = Box::new(someip::ServiceAdapter { siid: siid.clone(), sender: snd });
+            let adapter = Box::new(ServiceAdapter { siid: siid.clone(), sender: snd });
             guard.insert(service_key, adapter);
-
-            unsafe {
-                vsomeipc::application_register_message_handler(self.application,
-                    siid.service, siid.instance, Some(message_received_callback),
-                    self as *const _ as *mut std::os::raw::c_void)
-            };
         }
+        self.add_msg_handler(siid.service, siid.instance);
         unsafe{ vsomeipc::application_offer_service(self.application, siid.service, siid.instance,
-            siid.major_version, siid.minor_version) };
+             siid.major_version, siid.minor_version) };
         Ok(())
     }
 
-    pub fn unregister_service(&self, siid: someip::ServiceInstanceID) {
+    /// Unregisters a service provider.
+    pub fn unregister_service(&self, siid: ServiceInstanceID) {
         let service_key = (siid.service, siid.instance, siid.major_version);
         {
             let mut guard = self.services.write().unwrap();
             guard.remove(&service_key);
-            if !guard.keys().any(|&k|{k.0 == siid.service && k.1 == siid.instance}) {
-                unsafe{ vsomeipc::application_unregister_message_handler(self.application,
-                    siid.service, siid.instance);
+            self.release_msg_handler(siid.service, siid.instance);
+            unsafe{ vsomeipc::application_stop_offer_service(self.application, siid.service, siid.instance,
+                                                             siid.major_version, siid.minor_version) };
+        }
+    }
+
+    /// Registers a new proxy to a service. A unique proxy identifier is returned if successful.
+    /// The method requests from the service discovery to find the service, registers an availability
+    /// handler and installs the message forwarding to the given channel.
+    pub fn register_proxy(&self, siid: ServiceInstanceID, sender: Sender<Command>) -> Result<ProxyID, CapiError> {
+        let proxy_id = self.create_proxy_id()?;
+        let proxy_adapter = ProxyAdapter{ siid, sender, proxy_id };
+        let proxy_service_key = (siid.service, siid.instance);
+        {
+            let mut lock = self.req_services.write().unwrap();
+            if let Some(entry) = lock.get_mut(&proxy_service_key) {
+                assert!(!entry.1.contains_key(&proxy_id), "proxy id already present im req_services map");
+                if entry.0 != siid.major_version {
+                    return Err(CapiError::MajorVersionConflict);
                 }
+                entry.1.insert(proxy_id, proxy_adapter);
+            }
+            else {
+                let mut proxy_map = HashMap::new();
+                proxy_map.insert(proxy_id, proxy_adapter);
+                lock.insert(proxy_service_key, (siid.major_version, proxy_map));
+                unsafe{ vsomeipc::application_request_service(self.application,
+                    siid.service, siid.instance, siid.major_version, siid.minor_version) };
+                // register availability handler for (service, instance)
             }
         }
-        unsafe{ vsomeipc::application_stop_offer_service(self.application, siid.service,
-             siid.instance, siid.major_version, siid.minor_version) };
+        self.add_msg_handler(siid.service, siid.instance);
+        Ok(proxy_id)
+    }
+
+    pub fn unregister_proxy(&self, proxy_id: ProxyID, service: someip::ServiceID, instance: someip::InstanceID) {
+        let mut lock = self.req_services.write().unwrap();
+        if let Some(svc_entry) = lock.get_mut(&(service, instance)) {
+            svc_entry.1.remove(&proxy_id);
+            self.release_proxy_id(proxy_id);
+            if svc_entry.1.is_empty() {
+                unsafe{ vsomeipc::application_release_service(self.application, service, instance) };
+                // unregister availability handler (service, instance)
+                lock.remove(&(service, instance));
+            }
+        }
     }
 
     fn process_incoming_message(&self, msg: vsomeipc::message_t) {
@@ -135,25 +212,80 @@ impl Connection {
         let major_version = unsafe{ vsomeipc::message_get_interface_version(msg)};
         {
             let guard = self.services.read().unwrap();
-            if !self.try_forward_incoming_message(&msg, &(service_id, instance_id, major_version), &guard) {
-                if !self.try_forward_incoming_message(&msg, &(service_id, instance_id, someip::ANY_MAJOR), &guard) {
-                    self.try_forward_incoming_message(&msg, &(service_id, someip::ANY_INSTANCE, someip::ANY_MAJOR), &guard);
+            if !self.try_forward_service_message(&msg, &(service_id, instance_id, major_version), &guard) {
+                if !self.try_forward_service_message(&msg, &(service_id, instance_id, someip::ANY_MAJOR), &guard) {
+                    self.try_forward_service_message(&msg, &(service_id, someip::ANY_INSTANCE, someip::ANY_MAJOR), &guard);
                 }
             }
         }
     }
 
-    fn try_forward_incoming_message(&self, msg: &vsomeipc::message_t, sk: &someip::ServiceKey,
-        map: &HashMap<someip::ServiceKey, Box<someip::ServiceAdapter<Command>>>) -> bool {
+    fn try_forward_service_message(&self, msg: &vsomeipc::message_t, sk: &ServiceKey,
+                                   map: &HashMap<ServiceKey, Box<ServiceAdapter<Command>>>) -> bool {
         if let Some(service) = map.get(&sk) {
             let message = make_message_from(msg);
-            if service.sender.blocking_send(Command::Message(message) ).is_err() {
+            if service.sender.blocking_send(Command::Request(message) ).is_err() {
                 // todo log/handle send-failure
             }
             return true;
         }
         false
     }
+
+    fn add_msg_handler(&self, service: someip::ServiceID, instance: someip::InstanceID) {
+        let mut lock = self.msg_handler_refs.lock().unwrap();
+        let register_needed;
+        if let Some(refs) = lock.get_mut(&(service, instance)) {
+            register_needed = *refs == 0;
+            *refs += 1;
+        }
+        else {
+            lock.insert((service, instance), 1);
+            register_needed = true;
+        }
+
+        if register_needed {
+            unsafe {
+                vsomeipc::application_register_message_handler(
+                    self.application,
+                    service,
+                    instance,
+                    Some(message_received_callback),
+                    self as *const _ as *mut std::os::raw::c_void)
+            };
+        }
+    }
+
+    fn release_msg_handler(&self, service: someip::ServiceID, instance: someip::InstanceID) {
+        let mut lock = self.msg_handler_refs.lock().unwrap();
+        let mut unregister_needed = false;
+        if let Some(refs) = lock.get_mut(&(service, instance)) {
+            *refs -= 1;
+            unregister_needed = *refs == 0;
+        }
+        if unregister_needed {
+            unsafe {
+                vsomeipc::application_unregister_message_handler(
+                    self.application,
+                    service,
+                    instance)
+            };
+        }
+    }
+
+    fn create_proxy_id(&self) -> Result<ProxyID, CapiError> {
+        let mut lock = self.proxy_id_counter.lock().unwrap();
+        let proxy_id = u64::checked_add(*lock, 1);
+        if proxy_id.is_none() {
+            return Err(CapiError::OutOfProxyIds)
+        }
+        *lock = proxy_id.unwrap();
+        Ok(*lock)
+    }
+
+    fn release_proxy_id(&self, _proxy_id: ProxyID) {
+    }
+
 }
 
 impl Drop for Connection {

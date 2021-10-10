@@ -136,6 +136,19 @@ void application_unregister_message_handler(application_t app, service_t _servic
     (*app)->unregister_message_handler(_service, _instance, vsomeip::ANY_METHOD);
 }
 
+void application_request_service(application_t app, service_t service, instance_t instance,
+                                 major_version_t mjr_version, minor_version_t mnr_version)
+{
+    assert(app && *app);
+    (*app)->request_service(service, instance, mjr_version, mnr_version);
+}
+
+void application_release_service(application_t app, service_t service, instance_t instance)
+{
+    assert(app && *app);
+    (*app)->release_service(service, instance);
+}
+
 // ================================================================================================
 // message
 // ================================================================================================

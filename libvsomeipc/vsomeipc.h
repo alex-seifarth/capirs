@@ -84,6 +84,10 @@ VSOMEIPC_EXPORT void application_register_message_handler(application_t app, ser
           message_callback cbk, void* context);
 VSOMEIPC_EXPORT void application_unregister_message_handler(application_t app, service_t _service, instance_t _instance);
 
+VSOMEIPC_EXPORT void application_request_service(application_t app, service_t service, instance_t instance,
+                                                 major_version_t mjr_version, minor_version_t mnr_version);
+VSOMEIPC_EXPORT void application_release_service(application_t app, service_t service, instance_t instance);
+
 VSOMEIPC_EXPORT service_t message_get_service(message_t msg);
 VSOMEIPC_EXPORT instance_t message_get_instance(message_t msg);
 VSOMEIPC_EXPORT method_t message_get_method(message_t msg);

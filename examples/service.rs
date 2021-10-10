@@ -9,7 +9,7 @@ pub async fn main() {
     let conn = connection.clone();
     let tsk = tokio::spawn(async move {
         let mut channel = tokio::sync::mpsc::channel(1024);
-        let svc = capirs::someip::ServiceInstanceID{
+        let svc = capirs::ServiceInstanceID{
             service: 0x1111, instance: 0x2222, major_version: 0x01, minor_version: someip::DEFAULT_MINOR
         };
         let result = conn.register_service(svc.clone(), channel.0);
