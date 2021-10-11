@@ -55,6 +55,10 @@ typedef uint8_t return_code_t;
 VSOMEIPC_EXPORT int runtime_get(runtime_t* rt);
 VSOMEIPC_EXPORT void runtime_release(runtime_t rt);
 VSOMEIPC_EXPORT int runtime_create_app(runtime_t rt, application_t* app, const char* app_name);
+VSOMEIPC_EXPORT message_t runtime_create_request(runtime_t runtime, service_t service, instance_t instance,
+                                                 method_t method, client_t client, session_t session,
+                                                 message_type_t message_type, major_version_t mjr_version,
+                                                 return_code_t return_code, int is_reliable, int is_initial);
 
 //VSOMEIPC_EXPORT client_id_t application_client_id(application_t app);
 VSOMEIPC_EXPORT int application_init(application_t app);
@@ -93,6 +97,7 @@ VSOMEIPC_EXPORT void application_register_availability_callback(application_t ap
                                                                 availability_callback cbk, void* context);
 VSOMEIPC_EXPORT void application_unregister_availability_callback(application_t app, service_t service, instance_t instance);
 VSOMEIPC_EXPORT int application_is_available(application_t app, service_t service, instance_t instance);
+VSOMEIPC_EXPORT void application_send(application_t app, message_t msg);
 
 VSOMEIPC_EXPORT service_t message_get_service(message_t msg);
 VSOMEIPC_EXPORT instance_t message_get_instance(message_t msg);
@@ -105,6 +110,7 @@ VSOMEIPC_EXPORT protocol_version_t message_get_protocol_version(message_t msg);
 VSOMEIPC_EXPORT return_code_t message_get_return_code(message_t msg);
 VSOMEIPC_EXPORT int message_is_reliable(message_t msg);
 VSOMEIPC_EXPORT int message_is_initial(message_t msg);
+VSOMEIPC_EXPORT void message_destroy(message_t msg);
 
 #ifdef __cplusplus
 }

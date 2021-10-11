@@ -3,7 +3,6 @@ use super::vsomeipc;
 use super::someip;
 use std::sync::{Arc, Mutex, Condvar, RwLock};
 use std::collections::{HashMap};
-use std::thread::JoinHandle;
 use crate::types::MajorVersion;
 use std::os::raw::c_int;
 
@@ -44,6 +43,7 @@ pub enum Command {
 pub enum CapiError {
     OutOfProxyIds,
     MajorVersionConflict,
+    InvalidMessageType,
 }
 
 /// Connection handles the communication with the vsomeip layer.
@@ -56,6 +56,7 @@ pub struct Connection {
     msg_handler_refs: Mutex<HashMap<(someip::ServiceID, someip::InstanceID), u32>>,
     req_services: RwLock<HashMap<ProxyServiceKey, (MajorVersion, HashMap<ProxyID, ProxyAdapter<Command>>)>>,
     proxy_id_counter: Mutex<ProxyID>,
+    processing_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Connection {
@@ -75,6 +76,7 @@ impl Connection {
             msg_handler_refs: Mutex::new(HashMap::new()),
             req_services: RwLock::new(HashMap::new()),
             proxy_id_counter: Mutex::new(0),
+            processing_thread: Mutex::new(None),
         });
 
         unsafe{ vsomeipc::application_register_state_handler( application,
@@ -90,7 +92,7 @@ impl Connection {
     }
 
     /// Blocks until the connection towards vsomeip is completely established.
-    pub fn wait_until_connected(&self) {
+    fn wait_until_connected(&self) {
         let connected = self.connection_status.0.lock().unwrap();
         let _guard = self.connection_status.1
             .wait_while(connected, |connected| {!*connected})
@@ -99,22 +101,29 @@ impl Connection {
 
     /// Starts message processing.
     /// The method starts the message processing by calling the application's start() method in
-    /// a newly spawned thread. The thread's join handle is returned. The function blocks until the
-    /// connection towards vsomeip is completely established when wait_connected is true.
-    pub fn start(self: &Arc<Connection>, wait_connected: bool) -> JoinHandle<()> {
+    /// a newly spawned thread.
+    pub async fn start(self: &Arc<Connection>, wait_connected: bool) {
         let clone = self.clone();
-        let thread = std::thread::spawn(move || {
-            unsafe{ vsomeipc::application_start(clone.application) };
-        });
-        if wait_connected {
-            self.wait_until_connected();
+        let mut guard = self.processing_thread.lock().unwrap();
+        if guard.is_some() {
+            panic!("Tried to start the connection a second time.");
         }
-        thread
+        *guard = Some(std::thread::spawn(move || {
+            unsafe{ vsomeipc::application_start(clone.application) };
+        }));
+        let self_clone = self.clone();
+        if wait_connected {
+            tokio::task::spawn_blocking(move || {self_clone.wait_until_connected()} ).await.unwrap();
+        }
     }
 
     /// Stops the message processing - the start method will unblock.
-    pub fn stop(&self) {
+    pub async fn stop(&self) {
         unsafe{ vsomeipc::application_stop(self.application) };
+        let mut guard = self.processing_thread.lock().unwrap();
+        if let Some(join_handle) = guard.take() {
+            tokio::task::spawn_blocking(move || {let _ = join_handle.join();});
+        }
     }
 
     /// Returns the vsomeip application name
@@ -124,7 +133,7 @@ impl Connection {
 
     /// Registers a service provider and begins to forward received SOME/IP message to the
     /// given channel.
-    pub fn register_service(&self, siid: ServiceInstanceID, snd: Sender<Command>)
+    pub async fn register_service(&self, siid: ServiceInstanceID, snd: Sender<Command>)
         -> Result<(), ()> {
         let service_key = (siid.service, siid.instance, siid.major_version);
         {
@@ -142,7 +151,7 @@ impl Connection {
     }
 
     /// Unregisters a service provider.
-    pub fn unregister_service(&self, siid: ServiceInstanceID) {
+    pub async fn unregister_service(&self, siid: ServiceInstanceID) {
         let service_key = (siid.service, siid.instance, siid.major_version);
         {
             let mut guard = self.services.write().unwrap();
@@ -156,8 +165,9 @@ impl Connection {
     /// Registers a new proxy to a service. A unique proxy identifier is returned if successful.
     /// The method requests from the service discovery to find the service, registers an availability
     /// handler and installs the message forwarding to the given channel.
-    pub fn register_proxy(&self, siid: ServiceInstanceID, sender: Sender<Command>) -> Result<ProxyID, CapiError> {
+    pub async fn register_proxy(&self, siid: ServiceInstanceID, sender: Sender<Command>) -> Result<ProxyID, CapiError> {
         let proxy_id = self.create_proxy_id()?;
+        let sender_clone = sender.clone();
         let proxy_adapter = ProxyAdapter{ siid, sender, proxy_id };
         let proxy_service_key = (siid.service, siid.instance);
         {
@@ -167,15 +177,9 @@ impl Connection {
                 if entry.0 != siid.major_version {
                     return Err(CapiError::MajorVersionConflict);
                 }
-                if self.send_actual_availability(siid.service, siid.instance, &proxy_adapter.sender).is_err() {
-                    // todo handle send error
-                }
                 entry.1.insert(proxy_id, proxy_adapter);
             }
             else {
-                if self.send_actual_availability(siid.service, siid.instance, &proxy_adapter.sender).is_err() {
-                    // todo handle send error
-                }
                 let mut proxy_map = HashMap::new();
                 proxy_map.insert(proxy_id, proxy_adapter);
                 lock.insert(proxy_service_key, (siid.major_version, proxy_map));
@@ -186,10 +190,14 @@ impl Connection {
                     self as *const _ as *mut std::os::raw::c_void) };
             }
         }
+        if self.send_actual_availability(siid.service, siid.instance, &sender_clone).await.is_err() {
+            // todo handle send error
+        }
         self.add_msg_handler(siid.service, siid.instance);
         Ok(proxy_id)
     }
 
+    /// Unregisters a previously registered proxy to a service.
     pub fn unregister_proxy(&self, proxy_id: ProxyID, service: someip::ServiceID, instance: someip::InstanceID) {
         let mut lock = self.req_services.write().unwrap();
         if let Some(svc_entry) = lock.get_mut(&(service, instance)) {
@@ -201,6 +209,16 @@ impl Connection {
                 lock.remove(&(service, instance));
             }
         }
+    }
+
+    ///
+    fn send_request(&self, message: someip::Message) -> Result<(), ()> {
+        let msg = unsafe{ vsomeipc::runtime_create_request(
+            self.runtime, message.service, message.instance, message.method, message.client,
+            message.session, someip::MessageType::value(&message.message_type),
+            someip::ANY_MAJOR, someip::ReturnCode::value(&message.return_code),
+            if message.is_reliable {1} else {0}, if message.is_initial {1} else {0} )};
+        Ok(())
     }
 
     fn on_availability_callback(&self, service: someip::ServiceID, instance: someip::InstanceID, avail: bool) {
@@ -311,10 +329,10 @@ impl Connection {
         0 < unsafe{ vsomeipc::application_is_available(self.application, service, instance) }
     }
 
-    fn send_actual_availability(&self, service: someip::ServiceID, instance: someip::InstanceID,
+    async fn send_actual_availability(&self, service: someip::ServiceID, instance: someip::InstanceID,
         sender: &Sender<Command>) -> Result<(), ()> {
-        if sender.blocking_send(bool_to_availability(
-            self.is_service_available(service, instance), service, instance )).is_err() {
+        if sender.send(bool_to_availability(
+            self.is_service_available(service, instance), service, instance )).await.is_err() {
             return Err(());
         }
         Ok(())
@@ -392,6 +410,7 @@ extern "C"
 fn message_received_callback(msg: vsomeipc::message_t, context: *mut ::std::os::raw::c_void) {
     let connection = unsafe{(context as *mut Connection).as_ref()}.unwrap();
     connection.process_incoming_message(msg);
+    unsafe{ vsomeipc::message_destroy(msg) };
 }
 
 extern "C"
