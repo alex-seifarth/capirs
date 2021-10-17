@@ -7,7 +7,7 @@ use crate::types::MajorVersion;
 use std::os::raw::c_int;
 
 pub type Sender<T> = tokio::sync::mpsc::Sender<T>;
-pub type ServiceKey = (someip::ServiceID, someip::InstanceID, someip::MajorVersion);
+pub type ServiceKey = (someip::ServiceID, someip::InstanceID);
 pub type ProxyServiceKey = (someip::ServiceID, someip::InstanceID);
 pub type ProxyID = u64;
 
@@ -32,9 +32,9 @@ pub struct ProxyAdapter<T: Send + 'static> {
     pub proxy_id: ProxyID,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum Command {
-    Request(someip::Message),
+    Request(someip::Message, Option<bytes::Bytes>),
     ServiceAvailable(someip::ServiceID, someip::InstanceID),
     ServiceUnavailable(someip::ServiceID, someip::InstanceID),
 }
@@ -44,6 +44,9 @@ pub enum CapiError {
     OutOfProxyIds,
     MajorVersionConflict,
     InvalidMessageType,
+    NotImplemented,
+    ServiceInstanceUnknown,
+    ProxyIdUnknown,
 }
 
 /// Connection handles the communication with the vsomeip layer.
@@ -57,6 +60,7 @@ pub struct Connection {
     req_services: RwLock<HashMap<ProxyServiceKey, (MajorVersion, HashMap<ProxyID, ProxyAdapter<Command>>)>>,
     proxy_id_counter: Mutex<ProxyID>,
     processing_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    session_map: Mutex<HashMap<(someip::ClientID, someip::SessionID), (Sender<Command>)>>,
 }
 
 impl Connection {
@@ -77,6 +81,7 @@ impl Connection {
             req_services: RwLock::new(HashMap::new()),
             proxy_id_counter: Mutex::new(0),
             processing_thread: Mutex::new(None),
+            session_map: Mutex::new(HashMap::new())
         });
 
         unsafe{ vsomeipc::application_register_state_handler( application,
@@ -135,7 +140,7 @@ impl Connection {
     /// given channel.
     pub async fn register_service(&self, siid: ServiceInstanceID, snd: Sender<Command>)
         -> Result<(), ()> {
-        let service_key = (siid.service, siid.instance, siid.major_version);
+        let service_key = (siid.service, siid.instance);
         {
             let mut guard = self.services.write().unwrap();
             if guard.contains_key(&service_key) {
@@ -152,7 +157,7 @@ impl Connection {
 
     /// Unregisters a service provider.
     pub async fn unregister_service(&self, siid: ServiceInstanceID) {
-        let service_key = (siid.service, siid.instance, siid.major_version);
+        let service_key = (siid.service, siid.instance);
         {
             let mut guard = self.services.write().unwrap();
             guard.remove(&service_key);
@@ -211,14 +216,51 @@ impl Connection {
         }
     }
 
-    ///
-    fn send_request(&self, message: someip::Message) -> Result<(), ()> {
-        let msg = unsafe{ vsomeipc::runtime_create_request(
-            self.runtime, message.service, message.instance, message.method, message.client,
-            message.session, someip::MessageType::value(&message.message_type),
-            someip::ANY_MAJOR, someip::ReturnCode::value(&message.return_code),
-            if message.is_reliable {1} else {0}, if message.is_initial {1} else {0} )};
-        Ok(())
+    /// Send a request to the given service/instance.
+    pub async fn send_request(&self, proxy_id: ProxyID, service: someip::ServiceID,
+                              instance: someip::InstanceID, method: someip::MethodID,
+                              fire_and_forget: bool, reliable: bool, data: Option<bytes::Bytes>)
+            -> Result<Option<(someip::ClientID, someip::SessionID)>, CapiError>{
+        let (mjr_version, sender) = {
+            let lock = self.req_services.read().unwrap();
+            match lock.get(&(service, instance)) {
+                Some(entry) => {
+                    let proxy_adapter = entry.1.get(&proxy_id);
+                    if proxy_adapter.is_none() {
+                        return Err(CapiError::ProxyIdUnknown);
+                    }
+                    (entry.0, proxy_adapter.unwrap().sender.clone())
+                },
+                None=> {return Err(CapiError::ServiceInstanceUnknown);},
+            }
+        };
+
+        let msg = unsafe{ vsomeipc::runtime_create_request(self.runtime, service, instance, method,
+            mjr_version, if fire_and_forget {1} else {0}, if reliable {1} else {0}) };
+
+        if let Some(msg_data) = data {
+            assert!(msg_data.len() < (u32::MAX as usize));
+            let payload = unsafe{ vsomeipc::runtime_create_payload(self.runtime,
+                msg_data.as_ref().as_ptr(), msg_data.len() as u32)};
+            unsafe{ vsomeipc::application_send(self.application, msg, payload) };
+            unsafe{ vsomeipc::payload_destroy(payload) };
+        }
+        else {
+            unsafe{ vsomeipc::application_send(self.application, msg, std::ptr::null_mut()) };
+        }
+
+        let request_id = if !fire_and_forget {
+            let mut session_lock = self.session_map.lock().unwrap();
+            let request_id = ( unsafe{ vsomeipc::message_get_client(msg) }, unsafe{ vsomeipc::message_get_session(msg) } );
+            assert!(!session_lock.contains_key((&request_id)), "request id already in use");
+            session_lock.insert(request_id.clone(), (sender));
+            Some(request_id)
+        }
+        else {
+            None
+        };
+        unsafe{ vsomeipc::message_destroy(msg) };
+        Ok(request_id)
     }
 
     fn on_availability_callback(&self, service: someip::ServiceID, instance: someip::InstanceID, avail: bool) {
@@ -226,7 +268,7 @@ impl Connection {
         if let Some(entry) = lock.get(&(service, instance)) {
             let cmd = bool_to_availability(avail, service, instance);
             for proxy in entry.1.values() {
-                if proxy.sender.blocking_send(cmd).is_err() {
+                if proxy.sender.blocking_send(cmd.clone()).is_err() {
                     // todo log/handle send error
                 }
             }
@@ -248,13 +290,10 @@ impl Connection {
     fn process_service_message(&self, msg: vsomeipc::message_t) {
         let service_id = unsafe{ vsomeipc::message_get_service(msg)};
         let instance_id = unsafe{ vsomeipc::message_get_instance(msg)};
-        let major_version = unsafe{ vsomeipc::message_get_interface_version(msg)};
         {
             let guard = self.services.read().unwrap();
-            if !self.try_forward_service_message(&msg, &(service_id, instance_id, major_version), &guard) {
-                if !self.try_forward_service_message(&msg, &(service_id, instance_id, someip::ANY_MAJOR), &guard) {
-                    self.try_forward_service_message(&msg, &(service_id, someip::ANY_INSTANCE, someip::ANY_MAJOR), &guard);
-                }
+            if !self.try_forward_service_message(&msg, &(service_id, instance_id), &guard) {
+                self.try_forward_service_message(&msg, &(service_id, instance_id), &guard);
             }
         }
     }
@@ -263,7 +302,8 @@ impl Connection {
                                    map: &HashMap<ServiceKey, Box<ServiceAdapter<Command>>>) -> bool {
         if let Some(service) = map.get(&sk) {
             let message = make_message_from(msg);
-            if service.sender.blocking_send(Command::Request(message) ).is_err() {
+            let payload = make_payload_from(msg);
+            if service.sender.blocking_send(Command::Request(message, payload) ).is_err() {
                 // todo log/handle send-failure
             }
             return true;
@@ -389,6 +429,24 @@ fn make_message_from(msg: &vsomeipc::message_t) -> someip::Message {
         is_reliable: 0 != unsafe{ vsomeipc::message_is_reliable(*msg) },
         is_initial: 0 != unsafe{ vsomeipc::message_is_initial(*msg) },
     }
+}
+
+fn make_payload_from(msg: &vsomeipc::message_t) -> Option<bytes::Bytes>
+{
+    let mut length: u32 = 0;
+    let data = unsafe{ vsomeipc::message_get_data(*msg,(&mut length) as *mut u32) };
+    if length == 0 || data.is_null() {
+        println!("no payload");
+        return None
+    }
+    let mut payload = bytes::BytesMut::with_capacity(length as usize);
+    unsafe {
+        data.copy_to(payload.as_mut_ptr(), length as usize);
+        payload.set_len(length as usize);
+    }
+    println!("payload size {}", length);
+    println!("-> data: {:?}",  payload);
+    Some(payload.freeze())
 }
 
 fn bool_to_availability(avail: bool, service: someip::ServiceID, instance: someip::InstanceID)

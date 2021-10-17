@@ -17,7 +17,9 @@ pub async fn main() {
 
         loop {
             tokio::select!(
-                msg = channel.1.recv() => {println!("received message: {:?}", msg);},
+                msg = channel.1.recv() => {
+                    println!("received message: {:?}", msg);
+                },
                 _ = quit_r.recv() => {println!("terminating signal"); break;}
             );
         }

@@ -42,9 +42,9 @@ int runtime_create_app(runtime_t rt, application_t* app, const char* app_name)
     return 0;
 }
 
-message_t runtime_create_request(runtime_t runtime, service_t service, instance_t instance, method_t method, client_t client,
-                                 session_t session, message_type_t message_type, major_version_t mjr_version,
-                                 return_code_t return_code, int is_reliable, int is_initial)
+
+message_t runtime_create_request(runtime_t runtime, service_t service, instance_t instance,
+                                 method_t method, major_version_t mjr_vers, int fire_and_forget, int is_reliable)
 {
     assert(runtime && *runtime);
     auto msg = (*runtime)->create_request(is_reliable > 0);
@@ -52,12 +52,16 @@ message_t runtime_create_request(runtime_t runtime, service_t service, instance_
     msg->set_service(service);
     msg->set_instance(instance);
     msg->set_method(method);
-    msg->set_client(client);
-    msg->set_session(session);
-    msg->set_message_type(message_type);
-    msg->set_interface_version(mjr_version);
-    msg->set_return_code(return_code);
+    msg->set_interface_version(mjr_vers);
+    msg->set_message_type(fire_and_forget > 0 ? message_type_t::MT_REQUEST_NO_RETURN : message_type_t::MT_REQUEST);
     return new std::shared_ptr<vsomeip::message>(msg);
+}
+
+payload_t runtime_create_payload(runtime_t runtime, uint8_t const* pdata, uint32_t data_len)
+{
+    assert(runtime && *runtime);
+    auto payload = (*runtime)->create_payload((vsomeip::byte_t const*) pdata, data_len);
+    return new std::shared_ptr<vsomeip::payload>(payload);
 }
 
 // ================================================================================================
@@ -188,11 +192,14 @@ int application_is_available(application_t app, service_t service, instance_t in
     return (*app)->is_available(service, instance);
 }
 
-void application_send(application_t app, message_t msg)
+void application_send(application_t app, message_t msg, payload_t payload)
 {
     assert(app && *app);
     assert(msg && *msg);
-    (*app)->send(*msg);
+    if (payload && *payload) {
+        (*msg)->set_payload(*payload);
+    }
+    (*app)->send(std::shared_ptr<vsomeip::message>(*msg));
 }
 
 // ================================================================================================
@@ -254,8 +261,37 @@ int message_is_initial(message_t msg) {
     return (*msg)->is_initial() ? 1 : 0;
 }
 
+unsigned char* message_get_data(message_t msg, uint32_t* length)
+{
+    assert(msg && *msg);
+    assert(length);
+    auto payload = (*msg)->get_payload();
+    if (payload) {
+        *length = payload->get_length();
+        return payload->get_data();
+    }
+    else {
+        *length = 0;
+        return nullptr;
+    }
+}
+
 void message_destroy(message_t msg)
 {
     assert(msg && *msg);
     delete msg;
+}
+
+void payload_destroy(payload_t payload)
+{
+    delete payload;
+}
+
+unsigned char* payload_get_data(payload_t payload, uint32_t* length)
+{
+    assert(payload && *payload);
+    assert(length);
+
+    *length = (*payload)->get_length();
+    return (*payload)->get_data();
 }

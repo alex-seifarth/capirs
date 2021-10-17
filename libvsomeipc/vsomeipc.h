@@ -15,6 +15,7 @@ typedef vsomeip::client_t client_id_t;
 typedef std::shared_ptr<vsomeip::runtime>* runtime_t;
 typedef std::shared_ptr<vsomeip::application>* application_t;
 typedef std::shared_ptr<vsomeip::message> const* message_t;
+typedef std::shared_ptr<vsomeip::payload>* payload_t;
 
 typedef vsomeip::service_t service_t;
 typedef vsomeip::instance_t instance_t;
@@ -37,6 +38,7 @@ extern "C" {
 typedef void* application_t;
 typedef void* runtime_t;
 typedef void* message_t;
+typedef void* payload_t;
 
 typedef uint16_t client_id_t;
 typedef uint16_t service_t;
@@ -56,9 +58,8 @@ VSOMEIPC_EXPORT int runtime_get(runtime_t* rt);
 VSOMEIPC_EXPORT void runtime_release(runtime_t rt);
 VSOMEIPC_EXPORT int runtime_create_app(runtime_t rt, application_t* app, const char* app_name);
 VSOMEIPC_EXPORT message_t runtime_create_request(runtime_t runtime, service_t service, instance_t instance,
-                                                 method_t method, client_t client, session_t session,
-                                                 message_type_t message_type, major_version_t mjr_version,
-                                                 return_code_t return_code, int is_reliable, int is_initial);
+                                                 method_t method, major_version_t mjr_vers, int fire_and_forget, int is_reliable);
+VSOMEIPC_EXPORT payload_t runtime_create_payload(runtime_t runtime, uint8_t const* pdata, uint32_t data_len);
 
 //VSOMEIPC_EXPORT client_id_t application_client_id(application_t app);
 VSOMEIPC_EXPORT int application_init(application_t app);
@@ -97,7 +98,7 @@ VSOMEIPC_EXPORT void application_register_availability_callback(application_t ap
                                                                 availability_callback cbk, void* context);
 VSOMEIPC_EXPORT void application_unregister_availability_callback(application_t app, service_t service, instance_t instance);
 VSOMEIPC_EXPORT int application_is_available(application_t app, service_t service, instance_t instance);
-VSOMEIPC_EXPORT void application_send(application_t app, message_t msg);
+VSOMEIPC_EXPORT void application_send(application_t app, message_t msg, payload_t payload);
 
 VSOMEIPC_EXPORT service_t message_get_service(message_t msg);
 VSOMEIPC_EXPORT instance_t message_get_instance(message_t msg);
@@ -110,7 +111,11 @@ VSOMEIPC_EXPORT protocol_version_t message_get_protocol_version(message_t msg);
 VSOMEIPC_EXPORT return_code_t message_get_return_code(message_t msg);
 VSOMEIPC_EXPORT int message_is_reliable(message_t msg);
 VSOMEIPC_EXPORT int message_is_initial(message_t msg);
+VSOMEIPC_EXPORT unsigned char* message_get_data(message_t msg, uint32_t* length);
 VSOMEIPC_EXPORT void message_destroy(message_t msg);
+
+VSOMEIPC_EXPORT void payload_destroy(payload_t payload);
+VSOMEIPC_EXPORT unsigned char* payload_get_data(payload_t payload, uint32_t* length);
 
 #ifdef __cplusplus
 }

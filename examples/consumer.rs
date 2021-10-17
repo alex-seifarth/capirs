@@ -1,4 +1,5 @@
 use capirs::*;
+use std::sync::Arc;
 
 #[tokio::main]
 pub async fn main() {
@@ -15,10 +16,17 @@ pub async fn main() {
         let sender = channel.0.clone();
         let result = conn.register_proxy(svc, sender).await;
         assert!(result.is_ok());
+        let proxy_id = match result {
+            Ok(id) => id,
+            Err(_) => panic!(""),
+        };
 
         loop {
             tokio::select!(
-                Some(msg) = channel.1.recv() => {println!("received message: {:?}", msg);},
+                Some(msg) = channel.1.recv() => {
+                    println!("received message: {:?}", msg);
+                    process_message(&conn, &msg, proxy_id).await;
+                },
                 _ = quit_r.recv() => {println!("terminating signal"); break;}
             );
         }
@@ -37,4 +45,16 @@ pub async fn main() {
     let _ = tsk.await;
 
     connection.stop().await;
+}
+
+async fn process_message(conn: &Arc<Connection>, msg: &capirs::Command, proxy_id: capirs::ProxyID) {
+    match msg {
+        capirs::Command::ServiceAvailable(_, _) => {
+            let payload = bytes::Bytes::from("Good Morning .. ");
+            let result2 = conn.send_request(proxy_id, 0x1111, 0x2222, 0x0001,
+                                             false, false, Some(payload)).await;
+            assert!(result2.is_ok());
+        },
+        _ => {},
+    }
 }
