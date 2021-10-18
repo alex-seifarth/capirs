@@ -3,7 +3,7 @@ use super::vsomeipc;
 use super::someip;
 use std::sync::{Arc, Mutex, Condvar, RwLock};
 use std::collections::{HashMap};
-use crate::types::MajorVersion;
+use crate::types::{MajorVersion, ANY_INSTANCE};
 use std::os::raw::c_int;
 
 pub type Sender<T> = tokio::sync::mpsc::Sender<T>;
@@ -35,6 +35,7 @@ pub struct ProxyAdapter<T: Send + 'static> {
 #[derive(Clone, Debug)]
 pub enum Command {
     Request(someip::Message, Option<bytes::Bytes>),
+    Response(someip::Message, Option<bytes::Bytes>),
     ServiceAvailable(someip::ServiceID, someip::InstanceID),
     ServiceUnavailable(someip::ServiceID, someip::InstanceID),
 }
@@ -237,17 +238,7 @@ impl Connection {
 
         let msg = unsafe{ vsomeipc::runtime_create_request(self.runtime, service, instance, method,
             mjr_version, if fire_and_forget {1} else {0}, if reliable {1} else {0}) };
-
-        if let Some(msg_data) = data {
-            assert!(msg_data.len() < (u32::MAX as usize));
-            let payload = unsafe{ vsomeipc::runtime_create_payload(self.runtime,
-                msg_data.as_ref().as_ptr(), msg_data.len() as u32)};
-            unsafe{ vsomeipc::application_send(self.application, msg, payload) };
-            unsafe{ vsomeipc::payload_destroy(payload) };
-        }
-        else {
-            unsafe{ vsomeipc::application_send(self.application, msg, std::ptr::null_mut()) };
-        }
+        self.send_message(msg, data);
 
         let request_id = if !fire_and_forget {
             let mut session_lock = self.session_map.lock().unwrap();
@@ -261,6 +252,36 @@ impl Connection {
         };
         unsafe{ vsomeipc::message_destroy(msg) };
         Ok(request_id)
+    }
+
+    pub async fn send_response(&self, service: someip::ServiceID, instance: someip::InstanceID,
+                               method: someip::MethodID, reliable: bool, client_id: someip::ClientID,
+                               session_id: someip::SessionID, mjr_version: someip::MajorVersion, data: Option<bytes::Bytes>)
+                -> Result<(), CapiError> {
+        let resp = unsafe{ vsomeipc::runtime_create_response(self.runtime, service, instance,
+                 client_id, session_id, method, mjr_version, if reliable {1} else {0}) };
+        self.send_message(resp, data);
+        Ok(())
+    }
+
+    pub async fn send_response_from_req(&self, request: someip::Message, data: Option<bytes::Bytes>)
+            -> Result<(), CapiError> {
+        self.send_response(request.service, request.instance, request.method, request.is_reliable,
+            request.client, request.session, request.interface_version,
+                data).await
+    }
+
+    fn send_message(&self, msg: vsomeipc::message_t, data: Option<bytes::Bytes>) {
+        if let Some(msg_data) = data {
+            assert!(msg_data.len() < (u32::MAX as usize));
+            let payload = unsafe{ vsomeipc::runtime_create_payload(self.runtime,
+                           msg_data.as_ref().as_ptr(), msg_data.len() as u32)};
+            unsafe{ vsomeipc::application_send(self.application, msg, payload) };
+            unsafe{ vsomeipc::payload_destroy(payload) };
+        }
+        else {
+            unsafe{ vsomeipc::application_send(self.application, msg, std::ptr::null_mut()) };
+        }
     }
 
     fn on_availability_callback(&self, service: someip::ServiceID, instance: someip::InstanceID, avail: bool) {
@@ -279,11 +300,27 @@ impl Connection {
         match someip::MessageType::from_u8(unsafe{ vsomeipc::message_get_type(msg) }) {
             someip::MessageType::Request => self.process_service_message(msg),
             someip::MessageType::RequestNoReturn => self.process_service_message(msg),
-            someip::MessageType::Response => { todo!(); },
+            someip::MessageType::Response => { self.process_response_message(msg); },
             someip::MessageType::Error => { todo!(); }
             someip::MessageType::Notification => { todo!(); }
 
             _ => { println!("unsupported message type" )},
+        }
+    }
+
+    fn process_response_message(&self, msg: vsomeipc::message_t) {
+        let client_id = unsafe{ vsomeipc::message_get_client(msg) };
+        let session_id = unsafe{ vsomeipc::message_get_session(msg) };
+        {
+            let mut guard = self.session_map.lock().unwrap();
+            if let Some(session) = guard.get(&(client_id, session_id)) {
+                let _ = session.blocking_send(Command::Response(make_message_from(&msg),
+                                                        make_payload_from(&msg)));
+                guard.remove(&(client_id, session_id));
+            }
+            else {
+                println!("received response for unknown session");
+            }
         }
     }
 
@@ -293,7 +330,7 @@ impl Connection {
         {
             let guard = self.services.read().unwrap();
             if !self.try_forward_service_message(&msg, &(service_id, instance_id), &guard) {
-                self.try_forward_service_message(&msg, &(service_id, instance_id), &guard);
+                self.try_forward_service_message(&msg, &(service_id, ANY_INSTANCE), &guard);
             }
         }
     }

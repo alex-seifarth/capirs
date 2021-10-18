@@ -19,6 +19,10 @@ pub async fn main() {
             tokio::select!(
                 msg = channel.1.recv() => {
                     println!("received message: {:?}", msg);
+                    if let Some(Command::Request(req, payload)) = msg {
+                        let result = conn.send_response_from_req(req, Some(bytes::Bytes::from("F.ck the morning .. "))).await;
+                        assert!(result.is_ok());
+                    }
                 },
                 _ = quit_r.recv() => {println!("terminating signal"); break;}
             );

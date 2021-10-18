@@ -57,6 +57,24 @@ message_t runtime_create_request(runtime_t runtime, service_t service, instance_
     return new std::shared_ptr<vsomeip::message>(msg);
 }
 
+message_t runtime_create_response(runtime_t runtime, service_t service, instance_t instance,
+                                  client_t client, session_t session, method_t method, major_version_t mjr_vers,
+                                  int is_reliable)
+{
+    assert(runtime && *runtime);
+    auto resp = (*runtime)->create_message(is_reliable != 0);
+    assert(resp);
+    resp->set_service(service);
+    resp->set_instance(instance);
+    resp->set_method(method);
+    resp->set_client(client);
+    resp->set_session(session);
+    resp->set_interface_version(mjr_vers);
+    resp->set_message_type(vsomeip::message_type_e::MT_RESPONSE);
+    resp->set_return_code(vsomeip::return_code_e::E_OK);
+    return new std::shared_ptr<vsomeip::message>(resp);
+}
+
 payload_t runtime_create_payload(runtime_t runtime, uint8_t const* pdata, uint32_t data_len)
 {
     assert(runtime && *runtime);

@@ -59,6 +59,9 @@ VSOMEIPC_EXPORT void runtime_release(runtime_t rt);
 VSOMEIPC_EXPORT int runtime_create_app(runtime_t rt, application_t* app, const char* app_name);
 VSOMEIPC_EXPORT message_t runtime_create_request(runtime_t runtime, service_t service, instance_t instance,
                                                  method_t method, major_version_t mjr_vers, int fire_and_forget, int is_reliable);
+VSOMEIPC_EXPORT message_t runtime_create_response(runtime_t runtime, service_t service, instance_t instance,
+                                                  client_t client, session_t session, method_t method, major_version_t mjr_vers,
+                                                  int is_reliable);
 VSOMEIPC_EXPORT payload_t runtime_create_payload(runtime_t runtime, uint8_t const* pdata, uint32_t data_len);
 
 //VSOMEIPC_EXPORT client_id_t application_client_id(application_t app);
