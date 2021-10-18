@@ -19,10 +19,19 @@ pub async fn main() {
             tokio::select!(
                 msg = channel.1.recv() => {
                     println!("received message: {:?}", msg);
-                    if let Some(Command::Request(req, payload)) = msg {
-                        let result = conn.send_response_from_req(req, Some(bytes::Bytes::from("F.ck the morning .. "))).await;
-                        assert!(result.is_ok());
-                    }
+                    if let Some(Command::Request(req, _payload)) = msg {
+                        if req.method == 0x0001 {
+                            let result = conn.send_response(&req,
+                                someip::ReturnCode::Ok,
+                                Some(bytes::Bytes::from("F.ck the morning .. "))).await;
+                            assert!(result.is_ok());
+                        }
+                        else if req.method == 0x0002 {
+                            let result = conn.send_response(&req,
+                                someip::ReturnCode::ApplicationError(0x21),None).await;
+                            assert!(result.is_ok());
+                        }
+                     }
                 },
                 _ = quit_r.recv() => {println!("terminating signal"); break;}
             );

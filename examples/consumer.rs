@@ -55,11 +55,19 @@ async fn process_message(conn: &Arc<Connection>, msg: &capirs::Command, proxy_id
                                              false, false, Some(payload)).await;
             assert!(result2.is_ok());
         },
-        capirs::Command::Response(_msg, payload) => {
+        capirs::Command::Response(msg, payload) => {
+            assert_eq!(msg.method, 0x0001);
             if let Some(data) = payload {
                 println!("Response: {:?}", data);
+                let result = conn.send_request(proxy_id, 0x1111,
+                                               0x2222, 0x0002, false,
+                                               false, None).await;
+                assert!(result.is_ok());
             }
-        }
+        },
+        capirs::Command::Error(msg, _payload) => {
+            println!("received error for method {} error {:x}", msg.method, msg.return_code.value());
+        },
         _ => {},
     }
 }

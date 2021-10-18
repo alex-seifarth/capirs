@@ -72,7 +72,8 @@ pub enum ReturnCode {
     WrongInterfaceVersion,
     MalformedMessage,
     WrongMessageType,
-    Unknown(u8),
+    ApplicationError(u8),
+    Reserved(u8),
 }
 
 impl ReturnCode {
@@ -91,7 +92,8 @@ impl ReturnCode {
             WrongInterfaceVersion   => 0x08,
             MalformedMessage        => 0x09,
             WrongMessageType        => 0x0a,
-            Unknown(v)         => *v,
+            ApplicationError(v) => *v,
+            Reserved(v)         => *v,
         }
     }
 
@@ -108,7 +110,14 @@ impl ReturnCode {
             0x08 => ReturnCode::WrongInterfaceVersion,
             0x09 => ReturnCode::MalformedMessage,
             0x0a => ReturnCode::WrongMessageType,
-            _ => ReturnCode::Unknown(value),
+            _ => {
+                if value >= 0x20 && value <0x60 {
+                    ReturnCode::ApplicationError(value)
+                }
+                else {
+                    ReturnCode::Reserved(value)
+                }
+            }
         }
     }
 }

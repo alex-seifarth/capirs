@@ -36,6 +36,7 @@ pub struct ProxyAdapter<T: Send + 'static> {
 pub enum Command {
     Request(someip::Message, Option<bytes::Bytes>),
     Response(someip::Message, Option<bytes::Bytes>),
+    Error(someip::Message, Option<bytes::Bytes>),
     ServiceAvailable(someip::ServiceID, someip::InstanceID),
     ServiceUnavailable(someip::ServiceID, someip::InstanceID),
 }
@@ -254,21 +255,29 @@ impl Connection {
         Ok(request_id)
     }
 
-    pub async fn send_response(&self, service: someip::ServiceID, instance: someip::InstanceID,
-                               method: someip::MethodID, reliable: bool, client_id: someip::ClientID,
-                               session_id: someip::SessionID, mjr_version: someip::MajorVersion, data: Option<bytes::Bytes>)
-                -> Result<(), CapiError> {
-        let resp = unsafe{ vsomeipc::runtime_create_response(self.runtime, service, instance,
-                 client_id, session_id, method, mjr_version, if reliable {1} else {0}) };
-        self.send_message(resp, data);
-        Ok(())
+    pub async fn send_response(&self, request: &someip::Message, return_code: someip::ReturnCode,
+                               data: Option<bytes::Bytes>)
+                               -> Result<(), CapiError> {
+        self.send_reply(request.service, request.instance, request.method, return_code, request.is_reliable,
+            request.client, request.session, request.interface_version, data)
     }
 
-    pub async fn send_response_from_req(&self, request: someip::Message, data: Option<bytes::Bytes>)
-            -> Result<(), CapiError> {
-        self.send_response(request.service, request.instance, request.method, request.is_reliable,
-            request.client, request.session, request.interface_version,
-                data).await
+    fn send_reply(&self, service: someip::ServiceID, instance: someip::InstanceID,
+                  method: someip::MethodID, return_code: someip::ReturnCode, reliable: bool,
+                  client_id: someip::ClientID, session_id: someip::SessionID,
+                  mjr_version: someip::MajorVersion, data: Option<bytes::Bytes>) -> Result<(), CapiError> {
+        let message = match return_code {
+            someip::ReturnCode::Ok => unsafe{
+                vsomeipc::runtime_create_response(self.runtime, service, instance, client_id,
+                                                  session_id, method, mjr_version,
+                                                  if reliable {1} else {0}) },
+            _ => unsafe{
+                vsomeipc::runtime_create_error(self.runtime, service, instance, client_id,
+                                               session_id, method, mjr_version,
+                                               if reliable {1} else {0}, return_code.value()) },
+        };
+        self.send_message(message, data);
+        Ok(())
     }
 
     fn send_message(&self, msg: vsomeipc::message_t, data: Option<bytes::Bytes>) {
@@ -301,10 +310,26 @@ impl Connection {
             someip::MessageType::Request => self.process_service_message(msg),
             someip::MessageType::RequestNoReturn => self.process_service_message(msg),
             someip::MessageType::Response => { self.process_response_message(msg); },
-            someip::MessageType::Error => { todo!(); }
+            someip::MessageType::Error => { self.process_error_message(msg); }
             someip::MessageType::Notification => { todo!(); }
 
             _ => { println!("unsupported message type" )},
+        }
+    }
+
+    fn process_error_message(&self, msg: vsomeipc::message_t) {
+        let client_id = unsafe{ vsomeipc::message_get_client(msg) };
+        let session_id = unsafe{ vsomeipc::message_get_session(msg) };
+        {
+            let mut guard = self.session_map.lock().unwrap();
+            if let Some(session) = guard.get(&(client_id, session_id)) {
+                let _ = session.blocking_send(Command::Error(make_message_from(&msg),
+                                                                make_payload_from(&msg)));
+                guard.remove(&(client_id, session_id));
+            }
+            else {
+                println!("received response for unknown session");
+            }
         }
     }
 
