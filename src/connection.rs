@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, Condvar, RwLock};
 use std::collections::{HashMap};
 use crate::types::{MajorVersion, ANY_INSTANCE};
 use std::os::raw::c_int;
+use std::sync::mpsc::RecvTimeoutError;
 
 pub type Sender<T> = tokio::sync::mpsc::Sender<T>;
 pub type ServiceKey = (someip::ServiceID, someip::InstanceID);
@@ -37,6 +38,7 @@ pub enum Command {
     Request(someip::Message, Option<bytes::Bytes>),
     Response(someip::Message, Option<bytes::Bytes>),
     Error(someip::Message, Option<bytes::Bytes>),
+    Timeout(someip::ClientID, someip::SessionID),
     ServiceAvailable(someip::ServiceID, someip::InstanceID),
     ServiceUnavailable(someip::ServiceID, someip::InstanceID),
 }
@@ -58,11 +60,12 @@ pub struct Connection {
     application_name: String,
     connection_status: (Mutex<bool>, Condvar),
     services: RwLock<HashMap<ServiceKey, Box<ServiceAdapter<Command>>>>,
-    msg_handler_refs: Mutex<HashMap<(someip::ServiceID, someip::InstanceID), u32>>,
+    msg_handler_refs: Mutex<HashMap<(someip::ServiceID, someip::InstanceID), u32>>, // u32 = ref-count
     req_services: RwLock<HashMap<ProxyServiceKey, (MajorVersion, HashMap<ProxyID, ProxyAdapter<Command>>)>>,
     proxy_id_counter: Mutex<ProxyID>,
     processing_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
-    session_map: Mutex<HashMap<(someip::ClientID, someip::SessionID), (Sender<Command>)>>,
+    session_map: Mutex<HashMap<(someip::ClientID, someip::SessionID), (Sender<Command>, u32)>>, // u32 = time in secs to timeout
+    cleanup_thread_jh: Mutex<Option<(std::thread::JoinHandle<()>, std::sync::mpsc::Sender<bool>)>>
 }
 
 impl Connection {
@@ -83,13 +86,45 @@ impl Connection {
             req_services: RwLock::new(HashMap::new()),
             proxy_id_counter: Mutex::new(0),
             processing_thread: Mutex::new(None),
-            session_map: Mutex::new(HashMap::new())
+            session_map: Mutex::new(HashMap::new()),
+            cleanup_thread_jh: Mutex::new(None),
         });
 
         unsafe{ vsomeipc::application_register_state_handler( application,
             Some(state_changed_callback), &*connection as *const _ as *mut std::os::raw::c_void);
         }
         Ok( connection )
+    }
+
+    fn start_cleanup_thread(self: &Arc<Self>) {
+        let mut guard = self.cleanup_thread_jh.lock().unwrap();
+        if guard.is_some() {
+            panic!("tried to start cleanup thread twice");
+        }
+        let conn_clone = self.clone();
+        let (snd, rcv) = std::sync::mpsc::channel();
+        *guard = Some((std::thread::spawn(move || {
+            loop {
+                match rcv.recv_timeout(std::time::Duration::from_secs(1)) {
+                    Ok(true) => break,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                    Ok(false) => {},
+                    Err(RecvTimeoutError::Timeout) => { conn_clone.cleanup(); },
+                };
+            }
+        }), snd));
+    }
+
+    fn cleanup(self: &Arc<Self>) {
+        let mut guard = self.session_map.lock().unwrap();
+        guard.retain(|(client,session), (snd, to)| {
+            *to -= 1;
+            if *to ==  0 {
+                let _ = snd.blocking_send(Command::Timeout(*client, *session));
+                return false;
+            }
+            true
+        });
     }
 
     fn on_state_changed(&self, is_connected: bool) {
@@ -111,6 +146,7 @@ impl Connection {
     /// a newly spawned thread.
     pub async fn start(self: &Arc<Connection>, wait_connected: bool) {
         let clone = self.clone();
+        self.start_cleanup_thread();
         let mut guard = self.processing_thread.lock().unwrap();
         if guard.is_some() {
             panic!("Tried to start the connection a second time.");
@@ -126,10 +162,19 @@ impl Connection {
 
     /// Stops the message processing - the start method will unblock.
     pub async fn stop(&self) {
+        {
+            let mut cleanup_guard = self.cleanup_thread_jh.lock().unwrap();
+            if let Some((jh, snd)) = cleanup_guard.take() {
+                let _ = snd.send(true);
+                let _ = jh.join();
+            }
+        }
         unsafe{ vsomeipc::application_stop(self.application) };
-        let mut guard = self.processing_thread.lock().unwrap();
-        if let Some(join_handle) = guard.take() {
-            tokio::task::spawn_blocking(move || {let _ = join_handle.join();});
+        {
+            let mut guard = self.processing_thread.lock().unwrap();
+            if let Some(join_handle) = guard.take() {
+                let _ = tokio::task::spawn_blocking(move || { let _ = join_handle.join(); }).await;
+            }
         }
     }
 
@@ -244,8 +289,8 @@ impl Connection {
         let request_id = if !fire_and_forget {
             let mut session_lock = self.session_map.lock().unwrap();
             let request_id = ( unsafe{ vsomeipc::message_get_client(msg) }, unsafe{ vsomeipc::message_get_session(msg) } );
-            assert!(!session_lock.contains_key((&request_id)), "request id already in use");
-            session_lock.insert(request_id.clone(), (sender));
+            assert!(!session_lock.contains_key(&request_id), "request id already in use");
+            session_lock.insert(request_id.clone(), (sender, 5));
             Some(request_id)
         }
         else {
@@ -323,7 +368,7 @@ impl Connection {
         {
             let mut guard = self.session_map.lock().unwrap();
             if let Some(session) = guard.get(&(client_id, session_id)) {
-                let _ = session.blocking_send(Command::Error(make_message_from(&msg),
+                let _ = session.0.blocking_send(Command::Error(make_message_from(&msg),
                                                                 make_payload_from(&msg)));
                 guard.remove(&(client_id, session_id));
             }
@@ -339,7 +384,7 @@ impl Connection {
         {
             let mut guard = self.session_map.lock().unwrap();
             if let Some(session) = guard.get(&(client_id, session_id)) {
-                let _ = session.blocking_send(Command::Response(make_message_from(&msg),
+                let _ = session.0.blocking_send(Command::Response(make_message_from(&msg),
                                                         make_payload_from(&msg)));
                 guard.remove(&(client_id, session_id));
             }
@@ -498,7 +543,6 @@ fn make_payload_from(msg: &vsomeipc::message_t) -> Option<bytes::Bytes>
     let mut length: u32 = 0;
     let data = unsafe{ vsomeipc::message_get_data(*msg,(&mut length) as *mut u32) };
     if length == 0 || data.is_null() {
-        println!("no payload");
         return None
     }
     let mut payload = bytes::BytesMut::with_capacity(length as usize);
@@ -506,8 +550,6 @@ fn make_payload_from(msg: &vsomeipc::message_t) -> Option<bytes::Bytes>
         data.copy_to(payload.as_mut_ptr(), length as usize);
         payload.set_len(length as usize);
     }
-    println!("payload size {}", length);
-    println!("-> data: {:?}",  payload);
     Some(payload.freeze())
 }
 

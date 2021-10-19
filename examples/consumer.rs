@@ -67,6 +67,13 @@ async fn process_message(conn: &Arc<Connection>, msg: &capirs::Command, proxy_id
         },
         capirs::Command::Error(msg, _payload) => {
             println!("received error for method {} error {:x}", msg.method, msg.return_code.value());
+            let result = conn.send_request(proxy_id, 0x1111,
+                                           0x2222, 0x0003, false,
+                                           false, None).await;
+            assert!(result.is_ok());
+        },
+        capirs::Command::Timeout(client, session) => {
+            println!("Timeout for session ({}, {})", client, session);
         },
         _ => {},
     }
