@@ -123,6 +123,7 @@ VSOMEIPC_EXPORT void application_register_availability_callback(application_t ap
 VSOMEIPC_EXPORT void application_unregister_availability_callback(application_t app, service_t service, instance_t instance);
 VSOMEIPC_EXPORT int application_is_available(application_t app, service_t service, instance_t instance);
 VSOMEIPC_EXPORT void application_send(application_t app, message_t msg, payload_t payload);
+VSOMEIPC_EXPORT void application_notify(application_t app, service_t service, instance_t instance, event_t event, payload_t payload, int force);
 VSOMEIPC_EXPORT void application_offer_event(application_t app, service_t service, instance_t instance, event_t event,
                                              event_type_t event_type, reliability_t reliability,
                                              event_group_t const* pevent_groups, int count_event_groups);

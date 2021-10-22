@@ -238,6 +238,14 @@ void application_send(application_t app, message_t msg, payload_t payload)
     (*app)->send(std::shared_ptr<vsomeip::message>(*msg));
 }
 
+void application_notify(application_t app, service_t service, instance_t instance, event_t event, payload_t payload,
+                        int force)
+{
+    assert(app && *app);
+    (*app)->notify(service, instance, event, payload ? *payload : std::shared_ptr<vsomeip::payload>{},
+                   force != 0);
+}
+
 vsomeip::event_type_e map(event_type_t et) {
     switch (et) {
         case ET_EVENT: return vsomeip::event_type_e::ET_EVENT;

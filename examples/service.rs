@@ -1,3 +1,4 @@
+use bytes::BufMut;
 use capirs::*;
 
 #[tokio::main]
@@ -34,6 +35,11 @@ pub async fn main() {
                             let result = conn.send_response(&req,
                                 someip::ReturnCode::ApplicationError(0x21),None).await;
                             assert!(result.is_ok());
+                        }
+                        else if req.method == 0x0003 {
+                            let mut payload = bytes::BytesMut::new();
+                            payload.put_u32(0x4711);
+                            conn.send_notification(0x1111, 0x2222, 0x8001, Some(payload.freeze()), true).await;
                         }
                      }
                 },

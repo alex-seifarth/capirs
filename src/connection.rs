@@ -213,9 +213,7 @@ impl Connection {
             let mut oe_guard = self.offered_events.lock().unwrap();
             oe_guard.retain(|(service, instance, event) | {
                 if *service == siid.service && *instance == siid.instance {
-                    unsafe {
-                        vsomeipc::application_stop_offer_event(self.application, *service, *instance, *event)
-                    };
+                    unsafe { vsomeipc::application_stop_offer_event(self.application, *service, *instance, *event) };
                     return false;
                 }
                 true
@@ -314,6 +312,25 @@ impl Connection {
         }
     }
 
+    /// Send a notification to all subscribed consumers.
+    /// Pure events and selective events are always sent out, field events are only sent when
+    /// data has changed or @force is true.
+    pub async fn send_notification(&self, service: someip::ServiceID, instance: someip::InstanceID,
+                event: someip::InstanceID, data: Option<bytes::Bytes>, force: bool) {
+        if let Some(msg_data) = data {
+            let payload = unsafe { vsomeipc::runtime_create_payload(self.runtime,
+                                            msg_data.as_ref().as_ptr(), msg_data.len() as u32) };
+
+            unsafe{ vsomeipc::application_notify(self.application, service, instance, event, payload,
+                if force {1} else {0}) };
+            unsafe{ vsomeipc::payload_destroy(payload) };
+        }
+        else {
+            unsafe{ vsomeipc::application_notify(self.application, service, instance, event,
+                                                 std::ptr::null_mut(), if force {1} else {0}) };
+        }
+    }
+
     /// Send a request to the given service/instance.
     pub async fn send_request(&self, proxy_id: ProxyID, service: someip::ServiceID,
                               instance: someip::InstanceID, method: someip::MethodID,
@@ -351,9 +368,10 @@ impl Connection {
         Ok(request_id)
     }
 
+    /// Send a response for the given request message. The response can be either a
+    /// response message if the @return_code is Ok or an error message otherwise.
     pub async fn send_response(&self, request: &someip::Message, return_code: someip::ReturnCode,
-                               data: Option<bytes::Bytes>)
-                               -> Result<(), CapiError> {
+                               data: Option<bytes::Bytes>) -> Result<(), CapiError> {
         self.send_reply(request.service, request.instance, request.method, return_code, request.is_reliable,
             request.client, request.session, request.interface_version, data)
     }
@@ -373,6 +391,7 @@ impl Connection {
                                                if reliable {1} else {0}, return_code.value()) },
         };
         self.send_message(message, data);
+        unsafe{ vsomeipc::message_destroy(message) };
         Ok(())
     }
 
