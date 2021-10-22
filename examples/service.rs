@@ -15,6 +15,10 @@ pub async fn main() {
         let result = conn.register_service(svc.clone(), channel.0).await;
         assert!(result.is_ok());
 
+        let result2 = conn.register_event(0x1111, 0x2222, 0x8001,
+        1, someip::EventType::Broadcast, someip::EventReliability::Service).await;
+        assert!(result2.is_ok());
+
         loop {
             tokio::select!(
                 msg = channel.1.recv() => {

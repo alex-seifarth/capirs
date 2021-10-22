@@ -22,6 +22,8 @@ typedef vsomeip::instance_t instance_t;
 typedef vsomeip::major_version_t major_version_t;
 typedef vsomeip::minor_version_t minor_version_t;
 typedef vsomeip::method_t method_t;
+typedef vsomeip::event_t event_t;
+typedef vsomeip::eventgroup_t event_group_t;
 
 typedef vsomeip::client_t client_t;
 typedef vsomeip::session_t session_t;
@@ -51,8 +53,24 @@ typedef uint16_t session_t;
 typedef uint8_t message_type_t;
 typedef uint8_t protocol_version_t;
 typedef uint8_t return_code_t;
+typedef uint16_t event_t;
+typedef uint16_t event_group_t;
 
 #endif
+
+typedef enum event_type_t {
+    ET_EVENT = 0x00,
+    ET_SELECTIVE_EVENT = 0x01,
+    ET_FIELD = 0x02,
+    ET_UNKNOWN = 0xFF
+} event_type_t;
+
+typedef enum reliability_t {
+    RT_RELIABLE = 0x01,
+    RT_UNRELIABLE = 0x02,
+    RT_BOTH = 0x3, // RT_RELIABLE | RT_UNRELIABLE
+    RT_UNKNOWN = 0xFF
+} reliability_t;
 
 VSOMEIPC_EXPORT int runtime_get(runtime_t* rt);
 VSOMEIPC_EXPORT void runtime_release(runtime_t rt);
@@ -105,6 +123,10 @@ VSOMEIPC_EXPORT void application_register_availability_callback(application_t ap
 VSOMEIPC_EXPORT void application_unregister_availability_callback(application_t app, service_t service, instance_t instance);
 VSOMEIPC_EXPORT int application_is_available(application_t app, service_t service, instance_t instance);
 VSOMEIPC_EXPORT void application_send(application_t app, message_t msg, payload_t payload);
+VSOMEIPC_EXPORT void application_offer_event(application_t app, service_t service, instance_t instance, event_t event,
+                                             event_type_t event_type, reliability_t reliability,
+                                             event_group_t const* pevent_groups, int count_event_groups);
+VSOMEIPC_EXPORT void application_stop_offer_event(application_t app, service_t service, instance_t instance, event_t event);
 
 VSOMEIPC_EXPORT service_t message_get_service(message_t msg);
 VSOMEIPC_EXPORT instance_t message_get_instance(message_t msg);

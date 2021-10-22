@@ -1,3 +1,5 @@
+use super::*;
+
 pub type ServiceID = u16;
 pub type InstanceID = u16;
 pub type MajorVersion = u8;
@@ -7,6 +9,8 @@ pub type ClientID = u16;
 pub type SessionID = u16;
 pub type ProtocolVersion = u8;
 pub type InterfaceVersion = u8;
+pub type EventID = u16;
+pub type EventGroupID = u16;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum MessageType {
@@ -143,4 +147,57 @@ pub struct Message {
     pub return_code: ReturnCode,
     pub is_reliable: bool,
     pub is_initial: bool,
+}
+
+/// Type of SOME/IP event.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EventType {
+    /// Pure broadcast event.
+    Broadcast,
+
+    /// Selective event - event with consumer specific notification and data.
+    Selective,
+
+    /// Event represents a changed-event of a service field/attribute.
+    Field,
+}
+
+impl EventType {
+
+    pub fn to_c(&self) -> std::os::raw::c_uint {
+        match self {
+            EventType::Broadcast => vsomeipc::event_type_t_ET_EVENT,
+            EventType::Selective => vsomeipc::event_type_t_ET_SELECTIVE_EVENT,
+            EventType::Field => vsomeipc::event_type_t_ET_FIELD,
+        }
+    }
+}
+
+/// Reliability of event notification transport.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EventReliability {
+    /// Reliable transport protocol.
+    Reliable,
+
+    /// Unreliable transport protocol.
+    Unreliable,
+
+    /// Consumers must offer reliable and unreliable transport endpoint.
+    Both,
+
+    /// Event uses same reliability as its owning service.
+    Service,
+}
+
+impl EventReliability {
+
+    pub fn to_c(&self) -> std::os::raw::c_uint {
+        match self {
+            EventReliability::Reliable => vsomeipc::reliability_t_RT_RELIABLE,
+            EventReliability::Unreliable => vsomeipc::reliability_t_RT_UNRELIABLE,
+            EventReliability::Both => vsomeipc::reliability_t_RT_BOTH,
+            EventReliability::Service => vsomeipc::reliability_t_RT_UNKNOWN,
+        }
+    }
+
 }

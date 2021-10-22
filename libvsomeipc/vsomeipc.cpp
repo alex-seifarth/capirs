@@ -238,6 +238,50 @@ void application_send(application_t app, message_t msg, payload_t payload)
     (*app)->send(std::shared_ptr<vsomeip::message>(*msg));
 }
 
+vsomeip::event_type_e map(event_type_t et) {
+    switch (et) {
+        case ET_EVENT: return vsomeip::event_type_e::ET_EVENT;
+        case ET_SELECTIVE_EVENT: return vsomeip::event_type_e::ET_SELECTIVE_EVENT;
+        case ET_FIELD: return vsomeip::event_type_e::ET_FIELD;
+        case ET_UNKNOWN: return vsomeip::event_type_e::ET_UNKNOWN;
+    }
+    assert(false && "invalid enumeration value for event_type_t");
+    return vsomeip::event_type_e::ET_UNKNOWN;
+}
+
+vsomeip::reliability_type_e map(reliability_t rel) {
+    switch (rel) {
+        case RT_RELIABLE: return vsomeip::reliability_type_e::RT_RELIABLE;
+        case RT_UNRELIABLE: return vsomeip::reliability_type_e::RT_UNRELIABLE;
+        case RT_BOTH: return vsomeip::reliability_type_e::RT_BOTH;
+        case RT_UNKNOWN: return vsomeip::reliability_type_e::RT_UNKNOWN;
+    }
+    assert(false && "invalid enumeration value for reliability_t");
+    return vsomeip::reliability_type_e::RT_UNKNOWN;
+}
+
+void application_offer_event(application_t app, service_t service, instance_t instance, event_t event,
+                             event_type_t event_type, reliability_t reliability,
+                             event_group_t const* pevent_groups, int count_event_groups)
+{
+    assert(app && *app);
+    assert(pevent_groups && count_event_groups > 0);
+
+    std::set<vsomeip::eventgroup_t> eg_set{};
+    for (std::size_t i = 0; i < count_event_groups; ++i) {
+        eg_set.insert(*(pevent_groups + i));
+    }
+
+    (*app)->offer_event(service, instance, event, eg_set, map(event_type), std::chrono::milliseconds::zero(),
+                        false, false, nullptr, map(reliability));
+}
+
+void application_stop_offer_event(application_t app, service_t service, instance_t instance, event_t event)
+{
+    assert(app && *app);
+    (*app)->stop_offer_event(service, instance, event);
+}
+
 // ================================================================================================
 // message
 // ================================================================================================

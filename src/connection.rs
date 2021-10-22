@@ -2,7 +2,7 @@
 use super::vsomeipc;
 use super::someip;
 use std::sync::{Arc, Mutex, Condvar, RwLock};
-use std::collections::{HashMap};
+use std::collections::{HashMap, HashSet};
 use crate::types::{MajorVersion, ANY_INSTANCE};
 use std::os::raw::c_int;
 use std::sync::mpsc::RecvTimeoutError;
@@ -51,6 +51,7 @@ pub enum CapiError {
     NotImplemented,
     ServiceInstanceUnknown,
     ProxyIdUnknown,
+    EventAlreadyRegistered,
 }
 
 /// Connection handles the communication with the vsomeip layer.
@@ -65,7 +66,8 @@ pub struct Connection {
     proxy_id_counter: Mutex<ProxyID>,
     processing_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     session_map: Mutex<HashMap<(someip::ClientID, someip::SessionID), (Sender<Command>, u32)>>, // u32 = time in secs to timeout
-    cleanup_thread_jh: Mutex<Option<(std::thread::JoinHandle<()>, std::sync::mpsc::Sender<bool>)>>
+    cleanup_thread_jh: Mutex<Option<(std::thread::JoinHandle<()>, std::sync::mpsc::Sender<bool>)>>,
+    offered_events: Mutex<HashSet<(someip::ServiceID, someip::InstanceID, someip::EventID)>>,
 }
 
 impl Connection {
@@ -88,6 +90,7 @@ impl Connection {
             processing_thread: Mutex::new(None),
             session_map: Mutex::new(HashMap::new()),
             cleanup_thread_jh: Mutex::new(None),
+            offered_events: Mutex::new(HashSet::new()),
         });
 
         unsafe{ vsomeipc::application_register_state_handler( application,
@@ -206,6 +209,18 @@ impl Connection {
 
     /// Unregisters a service provider.
     pub async fn unregister_service(&self, siid: ServiceInstanceID) {
+        {
+            let mut oe_guard = self.offered_events.lock().unwrap();
+            oe_guard.retain(|(service, instance, event) | {
+                if *service == siid.service && *instance == siid.instance {
+                    unsafe {
+                        vsomeipc::application_stop_offer_event(self.application, *service, *instance, *event)
+                    };
+                    return false;
+                }
+                true
+            });
+        }
         let service_key = (siid.service, siid.instance);
         {
             let mut guard = self.services.write().unwrap();
@@ -213,6 +228,40 @@ impl Connection {
             self.release_msg_handler(siid.service, siid.instance);
             unsafe{ vsomeipc::application_stop_offer_service(self.application, siid.service, siid.instance,
                                                              siid.major_version, siid.minor_version) };
+        }
+    }
+
+    /// Register an event from a service - the event will then be offered via the SOME/IP SD.
+    pub async fn register_event(&self, service: someip::ServiceID, instance: someip::InstanceID,
+        event: someip::EventID, event_group: someip::EventGroupID, event_type: someip::EventType,
+        reliability: someip::EventReliability)  -> Result<(), CapiError>
+    {
+        {
+            let svc_guard = self.services.read().unwrap();
+            if !svc_guard.contains_key(&(service, instance)) {
+                return Err(CapiError::ServiceInstanceUnknown);
+            }
+        }
+
+        let mut oe_guard = self.offered_events.lock().unwrap();
+        if oe_guard.contains(&(service, instance, event)) {
+            return Err(CapiError::EventAlreadyRegistered);
+        }
+        oe_guard.insert((service, instance, event));
+        unsafe{
+            vsomeipc::application_offer_event(self.application, service, instance, event,
+            event_type.to_c(), reliability.to_c(), &event_group as *const u16, 1)
+        };
+        Ok(())
+    }
+
+    /// Unregisters an event - SOME/IP SD will stop offering it.
+    pub async fn unregister_event(&self, service: someip::ServiceID, instance: someip::InstanceID,
+                                  event: someip::EventID) {
+        let mut oe_guard = self.offered_events.lock().unwrap();
+        if oe_guard.contains(&(service, instance, event)) {
+            unsafe { vsomeipc::application_stop_offer_event(self.application, service, instance, event) };
+            oe_guard.remove(&(service, instance, event));
         }
     }
 
