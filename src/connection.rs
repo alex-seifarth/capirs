@@ -99,6 +99,7 @@ impl Connection {
     fn start_cleanup_thread(self: &Arc<Self>) {
         let mut guard = self.cleanup_thread_jh.lock().unwrap();
         if guard.is_some() {
+            log::error!("Cleanup thread of connection already started ... fatal.");
             panic!("tried to start cleanup thread twice");
         }
         let conn_clone = self.clone();
@@ -145,12 +146,13 @@ impl Connection {
     /// The method starts the message processing by calling the application's start() method in
     /// a newly spawned thread.
     pub async fn start(self: &Arc<Connection>, wait_connected: bool) {
-        let clone = self.clone();
-        self.start_cleanup_thread();
         let mut guard = self.processing_thread.lock().unwrap();
         if guard.is_some() {
-            panic!("Tried to start the connection a second time.");
+            log::error!("Application tried to start connection twice, ignored.");
+            return;
         }
+        let clone = self.clone();
+        self.start_cleanup_thread();
         *guard = Some(std::thread::spawn(move || {
             unsafe{ vsomeipc::application_start(clone.application) };
         }));
@@ -358,7 +360,7 @@ impl Connection {
             someip::MessageType::Error => { self.process_error_message(msg); }
             someip::MessageType::Notification => { todo!(); }
 
-            _ => { println!("unsupported message type" )},
+            msg => { log::warn!("unsupported message type: {:?}", msg); },
         }
     }
 
@@ -373,7 +375,7 @@ impl Connection {
                 guard.remove(&(client_id, session_id));
             }
             else {
-                println!("received response for unknown session");
+                log::info!("received response for unknown session ({:4x}.{:4x})", client_id, session_id);
             }
         }
     }
@@ -389,7 +391,7 @@ impl Connection {
                 guard.remove(&(client_id, session_id));
             }
             else {
-                println!("received response for unknown session");
+                log::info!("received error for unknown session ({:4x}.{:4x})", client_id, session_id);
             }
         }
     }
