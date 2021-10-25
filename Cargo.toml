@@ -19,6 +19,10 @@ path = "examples/service.rs"
 name = "consumer"
 path = "examples/consumer.rs"
 
+[[bin]]
+name = "service2"
+path = "examples/service2.rs"
+
 [features]
 #async-tokio = ["tokio"]
 
@@ -32,4 +36,5 @@ tokio = {version="1", features=['full']}
 libc = "0.2"
 bytes = "1"
 log = "0.4"
+lazy_static = "1.4.0"
 

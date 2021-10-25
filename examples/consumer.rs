@@ -30,7 +30,7 @@ pub async fn main() {
                 _ = quit_r.recv() => {println!("terminating signal"); break;}
             );
         }
-        conn.unregister_service(svc).await;
+        conn.unregister_proxy(proxy_id, svc.service, svc.instance);
     });
 
     match tokio::signal::ctrl_c().await {
@@ -47,15 +47,15 @@ pub async fn main() {
     connection.stop().await;
 }
 
-async fn process_message(conn: &Arc<Connection>, msg: &capirs::Command, proxy_id: capirs::ProxyID) {
+async fn process_message(conn: &Arc<Connection>, msg: &someip::Command, proxy_id: capirs::ProxyID) {
     match msg {
-        capirs::Command::ServiceAvailable(_, _) => {
+        someip::Command::ServiceAvailable(_, _) => {
             let payload = bytes::Bytes::from("Good Morning .. ");
             let result2 = conn.send_request(proxy_id, 0x1111, 0x2222, 0x0001,
                                              false, false, Some(payload)).await;
             assert!(result2.is_ok());
         },
-        capirs::Command::Response(msg, payload) => {
+        someip::Command::Response(msg, payload) => {
             assert_eq!(msg.method, 0x0001);
             if let Some(data) = payload {
                 println!("Response: {:?}", data);
@@ -65,14 +65,14 @@ async fn process_message(conn: &Arc<Connection>, msg: &capirs::Command, proxy_id
                 assert!(result.is_ok());
             }
         },
-        capirs::Command::Error(msg, _payload) => {
+        someip::Command::Error(msg, _payload) => {
             println!("received error for method {} error {:x}", msg.method, msg.return_code.value());
             let result = conn.send_request(proxy_id, 0x1111,
                                            0x2222, 0x0003, false,
                                            false, None).await;
             assert!(result.is_ok());
         },
-        capirs::Command::Timeout(client, session) => {
+        someip::Command::Timeout(client, session) => {
             println!("Timeout for session ({}, {})", client, session);
         },
         _ => {},

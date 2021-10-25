@@ -242,8 +242,12 @@ void application_notify(application_t app, service_t service, instance_t instanc
                         int force)
 {
     assert(app && *app);
-    (*app)->notify(service, instance, event, payload ? *payload : std::shared_ptr<vsomeip::payload>{},
-                   force != 0);
+    if (payload) {
+        (*app)->notify(service, instance, event, *payload,force != 0);
+    }
+    else {
+        (*app)->notify(service, instance, event, vsomeip::runtime::get()->create_payload(), force != 0);
+    }
 }
 
 vsomeip::event_type_e map(event_type_t et) {

@@ -12,6 +12,16 @@ pub type InterfaceVersion = u8;
 pub type EventID = u16;
 pub type EventGroupID = u16;
 
+#[derive(Clone, Debug)]
+pub enum Command {
+    Request(someip::Message, Option<bytes::Bytes>),
+    Response(someip::Message, Option<bytes::Bytes>),
+    Error(someip::Message, Option<bytes::Bytes>),
+    Timeout(someip::ClientID, someip::SessionID),
+    ServiceAvailable(someip::ServiceID, someip::InstanceID),
+    ServiceUnavailable(someip::ServiceID, someip::InstanceID),
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum MessageType {
     Request,

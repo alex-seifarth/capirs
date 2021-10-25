@@ -24,7 +24,7 @@ pub async fn main() {
             tokio::select!(
                 msg = channel.1.recv() => {
                     println!("received message: {:?}", msg);
-                    if let Some(Command::Request(req, _payload)) = msg {
+                    if let Some(someip::Command::Request(req, _payload)) = msg {
                         if req.method == 0x0001 {
                             let result = conn.send_response(&req,
                                 someip::ReturnCode::Ok,
@@ -46,7 +46,7 @@ pub async fn main() {
                 _ = quit_r.recv() => {println!("terminating signal"); break;}
             );
         }
-        conn.unregister_service(svc).await;
+        conn.unregister_service(svc);
     });
 
     match tokio::signal::ctrl_c().await {

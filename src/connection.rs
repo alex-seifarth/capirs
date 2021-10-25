@@ -1,6 +1,6 @@
 
 use super::vsomeipc;
-use super::someip;
+use super::someip::*;
 use std::sync::{Arc, Mutex, Condvar, RwLock};
 use std::collections::{HashMap, HashSet};
 use crate::types::{MajorVersion, ANY_INSTANCE};
@@ -8,16 +8,16 @@ use std::os::raw::c_int;
 use std::sync::mpsc::RecvTimeoutError;
 
 pub type Sender<T> = tokio::sync::mpsc::Sender<T>;
-pub type ServiceKey = (someip::ServiceID, someip::InstanceID);
-pub type ProxyServiceKey = (someip::ServiceID, someip::InstanceID);
+pub type ServiceKey = (ServiceID, InstanceID);
+pub type ProxyServiceKey = (ServiceID, InstanceID);
 pub type ProxyID = u64;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct ServiceInstanceID {
-    pub service: someip::ServiceID,
-    pub instance: someip::InstanceID,
-    pub major_version: someip::MajorVersion,
-    pub minor_version: someip::MinorVersion,
+    pub service: ServiceID,
+    pub instance: InstanceID,
+    pub major_version: MajorVersion,
+    pub minor_version: MinorVersion,
 }
 
 #[derive(Clone)]
@@ -33,17 +33,7 @@ pub struct ProxyAdapter<T: Send + 'static> {
     pub proxy_id: ProxyID,
 }
 
-#[derive(Clone, Debug)]
-pub enum Command {
-    Request(someip::Message, Option<bytes::Bytes>),
-    Response(someip::Message, Option<bytes::Bytes>),
-    Error(someip::Message, Option<bytes::Bytes>),
-    Timeout(someip::ClientID, someip::SessionID),
-    ServiceAvailable(someip::ServiceID, someip::InstanceID),
-    ServiceUnavailable(someip::ServiceID, someip::InstanceID),
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum CapiError {
     OutOfProxyIds,
     MajorVersionConflict,
@@ -61,13 +51,13 @@ pub struct Connection {
     application_name: String,
     connection_status: (Mutex<bool>, Condvar),
     services: RwLock<HashMap<ServiceKey, Box<ServiceAdapter<Command>>>>,
-    msg_handler_refs: Mutex<HashMap<(someip::ServiceID, someip::InstanceID), u32>>, // u32 = ref-count
+    msg_handler_refs: Mutex<HashMap<(ServiceID, InstanceID), u32>>, // u32 = ref-count
     req_services: RwLock<HashMap<ProxyServiceKey, (MajorVersion, HashMap<ProxyID, ProxyAdapter<Command>>)>>,
     proxy_id_counter: Mutex<ProxyID>,
     processing_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
-    session_map: Mutex<HashMap<(someip::ClientID, someip::SessionID), (Sender<Command>, u32)>>, // u32 = time in secs to timeout
+    session_map: Mutex<HashMap<(ClientID, SessionID), (Sender<Command>, u32)>>, // u32 = time in secs to timeout
     cleanup_thread_jh: Mutex<Option<(std::thread::JoinHandle<()>, std::sync::mpsc::Sender<bool>)>>,
-    offered_events: Mutex<HashSet<(someip::ServiceID, someip::InstanceID, someip::EventID)>>,
+    offered_events: Mutex<HashSet<(ServiceID, InstanceID, EventID)>>,
 }
 
 impl Connection {
@@ -208,7 +198,7 @@ impl Connection {
     }
 
     /// Unregisters a service provider.
-    pub async fn unregister_service(&self, siid: ServiceInstanceID) {
+    pub fn unregister_service(&self, siid: ServiceInstanceID) {
         {
             let mut oe_guard = self.offered_events.lock().unwrap();
             oe_guard.retain(|(service, instance, event) | {
@@ -230,9 +220,9 @@ impl Connection {
     }
 
     /// Register an event from a service - the event will then be offered via the SOME/IP SD.
-    pub async fn register_event(&self, service: someip::ServiceID, instance: someip::InstanceID,
-        event: someip::EventID, event_group: someip::EventGroupID, event_type: someip::EventType,
-        reliability: someip::EventReliability)  -> Result<(), CapiError>
+    pub async fn register_event(&self, service: ServiceID, instance: InstanceID,
+        event: EventID, event_group: EventGroupID, event_type: EventType,
+        reliability: EventReliability)  -> Result<(), CapiError>
     {
         {
             let svc_guard = self.services.read().unwrap();
@@ -254,8 +244,8 @@ impl Connection {
     }
 
     /// Unregisters an event - SOME/IP SD will stop offering it.
-    pub async fn unregister_event(&self, service: someip::ServiceID, instance: someip::InstanceID,
-                                  event: someip::EventID) {
+    pub async fn unregister_event(&self, service: ServiceID, instance: InstanceID,
+                                  event: EventID) {
         let mut oe_guard = self.offered_events.lock().unwrap();
         if oe_guard.contains(&(service, instance, event)) {
             unsafe { vsomeipc::application_stop_offer_event(self.application, service, instance, event) };
@@ -299,7 +289,7 @@ impl Connection {
     }
 
     /// Unregisters a previously registered proxy to a service.
-    pub fn unregister_proxy(&self, proxy_id: ProxyID, service: someip::ServiceID, instance: someip::InstanceID) {
+    pub fn unregister_proxy(&self, proxy_id: ProxyID, service: ServiceID, instance: InstanceID) {
         let mut lock = self.req_services.write().unwrap();
         if let Some(svc_entry) = lock.get_mut(&(service, instance)) {
             svc_entry.1.remove(&proxy_id);
@@ -315,8 +305,8 @@ impl Connection {
     /// Send a notification to all subscribed consumers.
     /// Pure events and selective events are always sent out, field events are only sent when
     /// data has changed or @force is true.
-    pub async fn send_notification(&self, service: someip::ServiceID, instance: someip::InstanceID,
-                event: someip::InstanceID, data: Option<bytes::Bytes>, force: bool) {
+    pub async fn send_notification(&self, service: ServiceID, instance: InstanceID,
+                event: EventID, data: Option<bytes::Bytes>, force: bool) {
         if let Some(msg_data) = data {
             let payload = unsafe { vsomeipc::runtime_create_payload(self.runtime,
                                             msg_data.as_ref().as_ptr(), msg_data.len() as u32) };
@@ -332,10 +322,10 @@ impl Connection {
     }
 
     /// Send a request to the given service/instance.
-    pub async fn send_request(&self, proxy_id: ProxyID, service: someip::ServiceID,
-                              instance: someip::InstanceID, method: someip::MethodID,
+    pub async fn send_request(&self, proxy_id: ProxyID, service: ServiceID,
+                              instance: InstanceID, method: MethodID,
                               fire_and_forget: bool, reliable: bool, data: Option<bytes::Bytes>)
-            -> Result<Option<(someip::ClientID, someip::SessionID)>, CapiError>{
+            -> Result<Option<(ClientID, SessionID)>, CapiError>{
         let (mjr_version, sender) = {
             let lock = self.req_services.read().unwrap();
             match lock.get(&(service, instance)) {
@@ -370,18 +360,18 @@ impl Connection {
 
     /// Send a response for the given request message. The response can be either a
     /// response message if the @return_code is Ok or an error message otherwise.
-    pub async fn send_response(&self, request: &someip::Message, return_code: someip::ReturnCode,
+    pub async fn send_response(&self, request: &Message, return_code: ReturnCode,
                                data: Option<bytes::Bytes>) -> Result<(), CapiError> {
         self.send_reply(request.service, request.instance, request.method, return_code, request.is_reliable,
             request.client, request.session, request.interface_version, data)
     }
 
-    fn send_reply(&self, service: someip::ServiceID, instance: someip::InstanceID,
-                  method: someip::MethodID, return_code: someip::ReturnCode, reliable: bool,
-                  client_id: someip::ClientID, session_id: someip::SessionID,
-                  mjr_version: someip::MajorVersion, data: Option<bytes::Bytes>) -> Result<(), CapiError> {
+    fn send_reply(&self, service: ServiceID, instance: InstanceID,
+                  method: MethodID, return_code: ReturnCode, reliable: bool,
+                  client_id: ClientID, session_id: SessionID,
+                  mjr_version: MajorVersion, data: Option<bytes::Bytes>) -> Result<(), CapiError> {
         let message = match return_code {
-            someip::ReturnCode::Ok => unsafe{
+            ReturnCode::Ok => unsafe{
                 vsomeipc::runtime_create_response(self.runtime, service, instance, client_id,
                                                   session_id, method, mjr_version,
                                                   if reliable {1} else {0}) },
@@ -408,7 +398,7 @@ impl Connection {
         }
     }
 
-    fn on_availability_callback(&self, service: someip::ServiceID, instance: someip::InstanceID, avail: bool) {
+    fn on_availability_callback(&self, service: ServiceID, instance: InstanceID, avail: bool) {
         let lock = self.req_services.read().unwrap();
         if let Some(entry) = lock.get(&(service, instance)) {
             let cmd = bool_to_availability(avail, service, instance);
@@ -421,12 +411,12 @@ impl Connection {
     }
 
     fn process_incoming_message(&self, msg: vsomeipc::message_t) {
-        match someip::MessageType::from_u8(unsafe{ vsomeipc::message_get_type(msg) }) {
-            someip::MessageType::Request => self.process_service_message(msg),
-            someip::MessageType::RequestNoReturn => self.process_service_message(msg),
-            someip::MessageType::Response => { self.process_response_message(msg); },
-            someip::MessageType::Error => { self.process_error_message(msg); }
-            someip::MessageType::Notification => { todo!(); }
+        match MessageType::from_u8(unsafe{ vsomeipc::message_get_type(msg) }) {
+            MessageType::Request => self.process_service_message(msg),
+            MessageType::RequestNoReturn => self.process_service_message(msg),
+            MessageType::Response => { self.process_response_message(msg); },
+            MessageType::Error => { self.process_error_message(msg); }
+            MessageType::Notification => { todo!(); }
 
             msg => { log::warn!("unsupported message type: {:?}", msg); },
         }
@@ -488,7 +478,7 @@ impl Connection {
         false
     }
 
-    fn add_msg_handler(&self, service: someip::ServiceID, instance: someip::InstanceID) {
+    fn add_msg_handler(&self, service: ServiceID, instance: InstanceID) {
         let mut lock = self.msg_handler_refs.lock().unwrap();
         let register_needed;
         if let Some(refs) = lock.get_mut(&(service, instance)) {
@@ -512,7 +502,7 @@ impl Connection {
         }
     }
 
-    fn release_msg_handler(&self, service: someip::ServiceID, instance: someip::InstanceID) {
+    fn release_msg_handler(&self, service: ServiceID, instance: InstanceID) {
         let mut lock = self.msg_handler_refs.lock().unwrap();
         let mut unregister_needed = false;
         if let Some(refs) = lock.get_mut(&(service, instance)) {
@@ -542,11 +532,11 @@ impl Connection {
     fn release_proxy_id(&self, _proxy_id: ProxyID) {
     }
 
-    fn is_service_available(&self, service: someip::ServiceID, instance: someip::InstanceID) -> bool {
+    fn is_service_available(&self, service: ServiceID, instance: InstanceID) -> bool {
         0 < unsafe{ vsomeipc::application_is_available(self.application, service, instance) }
     }
 
-    async fn send_actual_availability(&self, service: someip::ServiceID, instance: someip::InstanceID,
+    async fn send_actual_availability(&self, service: ServiceID, instance: InstanceID,
         sender: &Sender<Command>) -> Result<(), ()> {
         if sender.send(bool_to_availability(
             self.is_service_available(service, instance), service, instance )).await.is_err() {
@@ -592,17 +582,17 @@ fn create_application(runtime: vsomeipc::runtime_t, app_name: &str)
     Ok( application )
 }
 
-fn make_message_from(msg: &vsomeipc::message_t) -> someip::Message {
-    someip::Message {
+fn make_message_from(msg: &vsomeipc::message_t) -> Message {
+    Message {
         service: unsafe{ vsomeipc::message_get_service(*msg) },
         instance: unsafe{ vsomeipc::message_get_instance(*msg) },
         client: unsafe{ vsomeipc::message_get_client(*msg) },
         session: unsafe{ vsomeipc::message_get_session(*msg) },
         method: unsafe{ vsomeipc::message_get_method(*msg) },
-        message_type: someip::MessageType::from_u8(unsafe{ vsomeipc::message_get_type(*msg) } ),
+        message_type: MessageType::from_u8(unsafe{ vsomeipc::message_get_type(*msg) } ),
         protocol_version: unsafe{ vsomeipc::message_get_protocol_version(*msg) },
         interface_version: unsafe{ vsomeipc::message_get_interface_version(*msg) },
-        return_code: someip::ReturnCode::from_u8(unsafe{ vsomeipc::message_get_return_code(*msg) } ),
+        return_code: ReturnCode::from_u8(unsafe{ vsomeipc::message_get_return_code(*msg) } ),
         is_reliable: 0 != unsafe{ vsomeipc::message_is_reliable(*msg) },
         is_initial: 0 != unsafe{ vsomeipc::message_is_initial(*msg) },
     }
@@ -623,7 +613,7 @@ fn make_payload_from(msg: &vsomeipc::message_t) -> Option<bytes::Bytes>
     Some(payload.freeze())
 }
 
-fn bool_to_availability(avail: bool, service: someip::ServiceID, instance: someip::InstanceID)
+fn bool_to_availability(avail: bool, service: ServiceID, instance: InstanceID)
     -> Command {
     if avail {
         Command::ServiceAvailable(service, instance)
@@ -646,7 +636,7 @@ fn message_received_callback(msg: vsomeipc::message_t, context: *mut ::std::os::
 }
 
 extern "C"
-fn availability_callback(service: someip::ServiceID, instance: someip::InstanceID, avail: c_int,
+fn availability_callback(service: ServiceID, instance: InstanceID, avail: c_int,
                          context: *mut ::std::os::raw::c_void)
 {
     let connection = unsafe{(context as *mut Connection).as_ref()}.unwrap();
