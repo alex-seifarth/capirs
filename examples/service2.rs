@@ -2,84 +2,6 @@ use std::sync::Arc;
 use capirs::*;
 // use bytes::BufMut;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct EventDescriptor {
-    id: someip::EventID,
-    grp: someip::EventGroupID,
-    typ: someip::EventType,
-    rel: someip::EventReliability,
-}
-
-/// Trait for describing a SOME/IP service.
-trait ServiceDescriptor {
-    type StubType;
-
-    /// Type representing the service's request messages (typically an enum).
-    type Request;
-
-    /// Type representing the service's response messages (typically an enum).
-    type Response;
-
-    /// Type representing the service's notification messages (typically an enum).
-    type Notification;
-
-    /// Returns the SOME/IP service identifier for the service.
-    fn service_id() -> someip::ServiceID;
-
-    /// Returns the interface version (major, minor) for the service instances of this service.
-    fn version() -> (someip::MajorVersion, someip::MinorVersion);
-
-    /// This method must return an array of event descriptors that the service will provide.
-    /// This is used when a new service instance is being created to register the events with
-    /// the SOME/IP runtime.
-    fn event_descriptors(instance: someip::InstanceID) -> std::vec::Vec<EventDescriptor>;
-
-    /// Creates a stub for the service that can drive the receiver where requests from consumers
-    /// will be received.
-    fn create_stub(instance: someip::InstanceID,
-                    receiver: tokio::sync::mpsc::Receiver<someip::Command>,
-                    connection: Arc<capirs::Connection>,
-                    runtime: Arc<Runtime>) -> Self::StubType;
-}
-
-struct Runtime {
-    connection: Arc<Connection>,
-}
-
-impl Runtime {
-
-    pub async fn create(app_name: &str) -> Arc<Runtime> {
-        let connection = Connection::create(app_name).unwrap();
-        connection.start(true).await;
-        Arc::new(Runtime{connection})
-    }
-
-    pub async fn create_service<T: ServiceDescriptor>(self: &Arc<Runtime>, instance: someip::InstanceID) -> Result<T::StubType, capirs::CapiError> {
-        let channel = tokio::sync::mpsc::channel(1024);
-        let version = T::version();
-        let svc = capirs::ServiceInstanceID {service: T::service_id(), instance,
-            major_version: version.0, minor_version: version.1};
-        self.connection.register_service(svc.clone(), channel.0).await.unwrap();
-
-        for ed in T::event_descriptors(instance) {
-            if let Err(err) =  self.connection.register_event(T::service_id(), instance, ed.id, ed.grp,
-                ed.typ, ed.rel).await {
-                self.connection.unregister_service(svc);
-                return Err(err);
-            }
-        }
-        Ok(T::create_stub(instance, channel.1, self.connection.clone(), self.clone()))
-    }
-
-    pub fn remove_service<T: ServiceDescriptor>(self: &Arc<Runtime>, instance: someip::InstanceID) {
-        let version = T::version();
-        let svc = capirs::ServiceInstanceID {service: T::service_id(), instance,
-            major_version: version.0, minor_version: version.1};
-        self.connection.unregister_service(svc);
-    }
-
-}
-
 #[derive(Debug)]
 enum MyServiceMessage {
     Request1{request: someip::Message, data: std::string::String},
@@ -91,14 +13,11 @@ struct MyService {
     instance: someip::InstanceID,
     connection: Arc<capirs::Connection>,
     receiver: tokio::sync::mpsc::Receiver<someip::Command>,
-    runtime: Arc<Runtime>
+    runtime: Arc<capirs::Runtime>
 }
 
 impl ServiceDescriptor for MyService {
     type StubType = Self;
-    type Request = ();
-    type Response = ();
-    type Notification = ();
 
     fn service_id() -> someip::ServiceID { 0x1111 }
 
@@ -111,7 +30,7 @@ impl ServiceDescriptor for MyService {
     }
 
     fn create_stub(instance: someip::InstanceID, receiver: tokio::sync::mpsc::Receiver<someip::Command>,
-                   connection: Arc<Connection>, runtime: Arc<Runtime>) -> Self::StubType {
+                   connection: Arc<Connection>, runtime: Arc<capirs::Runtime>) -> Self::StubType {
         MyService { instance, connection, receiver, runtime }
     }
 }

@@ -4,6 +4,7 @@
 */
 mod vsomeipc;
 
+mod runtime;
 mod connection;
 mod types;
 
@@ -12,6 +13,7 @@ pub mod someip {
 }
 
 pub use connection::*;
+pub use runtime::*;
 
 #[cfg(test)]
 mod tests {
