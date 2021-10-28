@@ -81,7 +81,7 @@ the internal architecture with respect to how vsomeip is being used and wrapped.
 * [gcc 10]()
 * [vsomeip 3]()
 
-##Getting Started
+## Getting Started
 
 ### Download/Clone the source
 Get the source code from github by cloning the repo using ssh
@@ -112,21 +112,21 @@ cargo build
 ```
 should do everything - it should build the 
 * static C/C++ library interfacing `vsomeip v3` shared library,
-* build the `capirs` library linked statically to the before build C/C++ library 
+* build the `capirs` library linked statically to the before built C/C++ library 
 * building the example code to test.
 
 ### Installation
-There is actuall no installation due to the proof-of-concept nature of the project.
+There is actually no installation due to the proof-of-concept nature of the project.
 
 ### Running examples
 The examples under ```<capirs-root>/examples``` are used to test the library.
-The are build always with the library and could be run under 
+They are build always with the library and could be run under 
 ```<capirs-root>/target/debug/<example-code>```.
 It might be necessary to set ```LD_LIBRARY_PATH``` before the executable can be 
 run, the environment variable should contain the path to the ```libvsomeip.so.3``` 
 shared library.
 
-##Roadmap
+## Roadmap
  - [x] Offer service provider
  - [x] Offer events
  - [x] Send Requests / Receive Requests
