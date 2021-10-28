@@ -3,12 +3,16 @@
 -->
 
 <!-- PROJECT SHIELDS -->
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
-<!--[![LinkedIn][linkedin-shield]][linkedin-url]-->
+
+[comment]: <> ([![Contributors][contributors-shield]][contributors-url])
+
+[comment]: <> ([![Forks][forks-shield]][forks-url])
+
+[comment]: <> ([![Stargazers][stars-shield]][stars-url])
+
+[comment]: <> ([![Issues][issues-shield]][issues-url])
+
+[comment]: <> ([![MIT License][license-shield]][license-url])
 
 
 <br />
@@ -66,57 +70,74 @@
 
 <!-- ABOUT THE PROJECT -->
 ## About The Project
-* Rust API for vsomeip3 library
-* CommonAPI like proxy and service stubs for work with SOME/IP services
+This is actually a non-productive proof-of-concept repository how a CommonAPI for Rust 
+could look like. This concerns the interface towards users of the API and also 
+the internal architecture with respect to how vsomeip is being used and wrapped.
 
 ### Built With
 
 * [rust]() 
 * [cmake]()
 * [gcc 10]()
+* [vsomeip 3]()
 
+##Getting Started
 
-<!-- GETTING STARTED
-## Getting Started
-
-To get a local copy up and running follow these simple steps.
+### Download/Clone the source
+Get the source code from github by cloning the repo using ssh
+```shell
+git clone git@github.com:alex-seifarth/capirs.git
+```
+or https
+```shell
+git clone https://github.com/alex-seifarth/capirs.git
+```
+or download a source tarball
+```shell
+https://github.com/alex-seifarth/capirs/archive/refs/heads/master.zip
+```
 
 ### Prerequisites
+* Rust in an actual version (1.55, 1.56) with Cargo is required. See [https://www.rust-lang.org/](https://www.rust-lang.org/),
+* vsomeip v3 must be available on the system so that cmake can find it [https://github.com/GENIVI/vsomeip](https://github.com/GENIVI/vsomeip).
 
-This is an example of how to list things you need to use the software and how to install them.
-* npm
-  ```sh
-  npm install npm@latest -g
-  ```
+### Building
+The C/C++ part is integrated into the Rust build process and should not require 
+extra attention. 
+
+In the best case a 
+```shell
+cd <capirs-root-dir>
+cargo build
+```
+should do everything - it should build the 
+* static C/C++ library interfacing `vsomeip v3` shared library,
+* build the `capirs` library linked statically to the before build C/C++ library 
+* building the example code to test.
 
 ### Installation
+There is actuall no installation due to the proof-of-concept nature of the project.
 
-1. Clone the repo
-   ```sh
-   git clone https://github.com/alex-seifarth/capirs.git
-   ```
-2. Install NPM packages
-   ```sh
-   npm install
-   ```
- -->
+### Running examples
+The examples under ```<capirs-root>/examples``` are used to test the library.
+The are build always with the library and could be run under 
+```<capirs-root>/target/debug/<example-code>```.
+It might be necessary to set ```LD_LIBRARY_PATH``` before the executable can be 
+run, the environment variable should contain the path to the ```libvsomeip.so.3``` 
+shared library.
 
-
-<!-- USAGE EXAMPLES 
-## Usage
-
-Use this space to show useful examples of how a project can be used. Additional screenshots, code examples and demos work well in this space. You may also link to more resources.
-
-_For more examples, please refer to the [Documentation](https://example.com)_
--->
-
-
-<!-- ROADMAP 
-## Roadmap
-
-See the [open issues](https://github.com/alex-seifarth/capirs/issues) for a list of proposed features (and known issues).
--->
-
+##Roadmap
+ - [x] Offer service provider
+ - [x] Offer events
+ - [x] Send Requests / Receive Requests
+ - [x] Send Response / Receive Response (incl. error) / Session timeout
+ - [x] Send events
+ - [ ] Request/Subscribe events
+ - [ ] Service stub creation by runtime
+ - [ ] Service stub generation from FIDL/FDEPL file via ```pyfranca```
+ - [ ] Proxy creation by runtime
+ - [ ] Proxy generation from FIDL/FDEPL file via ```pyfranca```
+ 
 
 <!-- CONTRIBUTING
 ## Contributing
@@ -170,6 +191,4 @@ Project Link: [https://github.com/alex-seifarth/capirs](https://github.com/alex-
 [issues-shield]: https://img.shields.io/github/issues/alex-seifarth/repo.svg?style=for-the-badge
 [issues-url]: https://github.com/alex-seifarth/capirs/issues
 [license-shield]: https://img.shields.io/github/license/alex-seifarth/repo.svg?style=for-the-badge
-[license-url]: https://github.com/alex-seifarth/capirs/blob/master/LICENSE.txt
-[linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
-[linkedin-url]: https://linkedin.com/in/alex-seifarth
+[license-url]: https://github.com/alex-seifarth/capirs/blob/master/LICENSE
