@@ -37,4 +37,5 @@ libc = "0.2"
 bytes = "1"
 log = "0.4"
 lazy_static = "1.4.0"
+nom = "7"
 
